@@ -64,7 +64,7 @@ function sortKeysObject(obj: Record<string, any>): Record<string, any> {
 }
 
 /**
- * Splits ledger content into documents.
+ * Splits log content into documents.
  */
 export function splitRawDocuments(fileContent: string): string[] {
   if (!fileContent || !fileContent.trim()) {
@@ -158,7 +158,7 @@ function verifySingleBlock(
     } else {
       return {
         valid: false,
-        reason: `Blockchain link broken at block ${i}: expected prev_meta_hash to be '${expectedPrevHash}', but found '${meta.prev_meta_hash}'.`,
+        reason: `Chain link broken at block ${i}: expected prev_meta_hash to be '${expectedPrevHash}', but found '${meta.prev_meta_hash}'.`,
         blockIndex: i,
         tamperedComponent: 'chain',
         expected: expectedPrevHash,
@@ -197,7 +197,7 @@ function verifySingleBlock(
 }
 
 /**
- * Validates a complete ledger string in-memory.
+ * Validates a complete package chain/log string in-memory.
  */
 export function verifyInMemoryChain(chainContent: string): VerificationReport {
   const docs = splitRawDocuments(chainContent);

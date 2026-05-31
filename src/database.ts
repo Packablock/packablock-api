@@ -13,7 +13,7 @@ export interface RepositoryRecord {
   created_at: string;
 }
 
-export interface LedgerRecord {
+export interface LogRecord {
   id: number;
   repo_id: number;
   chain_content: string;
@@ -43,9 +43,9 @@ export function initDb(): void {
     );
   `);
   
-  // Create Ledgers table
+  // Create Logs table
   db.run(`
-    CREATE TABLE IF NOT EXISTS ledgers (
+    CREATE TABLE IF NOT EXISTS logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
       chain_content TEXT NOT NULL,
@@ -65,7 +65,6 @@ export function initDb(): void {
 export function registerRepository(owner: string, repo: string, token: string): RepositoryRecord {
   const now = new Date().toISOString();
   
-  // Use INSERT OR REPLACE to update registration if repo is re-registered
   db.run(`
     INSERT INTO repositories (owner, repo, registration_token, created_at)
     VALUES (?, ?, ?, ?)
@@ -98,18 +97,18 @@ export function getRepositoryByPath(owner: string, repo: string): RepositoryReco
 }
 
 /**
- * Saves or updates a repository's cryptographically verified ledger.
+ * Saves or updates a repository's cryptographically verified package log.
  */
-export function saveLedger(
+export function saveLog(
   repoId: number, 
   chainContent: string, 
   blockCount: number, 
   lastBlockHash: string
-): LedgerRecord {
+): LogRecord {
   const now = new Date().toISOString();
   
   db.run(`
-    INSERT INTO ledgers (repo_id, chain_content, block_count, last_block_hash, updated_at)
+    INSERT INTO logs (repo_id, chain_content, block_count, last_block_hash, updated_at)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(repo_id) DO UPDATE SET
       chain_content = excluded.chain_content,
@@ -118,16 +117,16 @@ export function saveLedger(
       updated_at = excluded.updated_at;
   `, [repoId, chainContent, blockCount, lastBlockHash, now]);
 
-  const query = db.prepare('SELECT * FROM ledgers WHERE repo_id = ?');
-  const record = query.get(repoId) as LedgerRecord;
+  const query = db.prepare('SELECT * FROM logs WHERE repo_id = ?');
+  const record = query.get(repoId) as LogRecord;
   return record;
 }
 
 /**
- * Retrieves the ledger record for a repository.
+ * Retrieves the package log record for a repository.
  */
-export function getLedger(repoId: number): LedgerRecord | null {
-  const query = db.prepare('SELECT * FROM ledgers WHERE repo_id = ?');
-  const record = query.get(repoId) as LedgerRecord | null;
+export function getLog(repoId: number): LogRecord | null {
+  const query = db.prepare('SELECT * FROM logs WHERE repo_id = ?');
+  const record = query.get(repoId) as LogRecord | null;
   return record;
 }

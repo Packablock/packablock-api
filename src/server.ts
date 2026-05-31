@@ -5,8 +5,8 @@ import {
   registerRepository, 
   getRepositoryByToken, 
   getRepositoryByPath, 
-  saveLedger, 
-  getLedger 
+  saveLog, 
+  getLog 
 } from './database.js';
 import { verifyInMemoryChain } from './verify.js';
 import { verifyGithubOidcToken } from './oidc.js';
@@ -61,15 +61,15 @@ server.post('/api/v1/repos/register', async (request, reply) => {
 });
 
 /**
- * Push cryptographically verified ledger to the database.
+ * Push cryptographically verified package chain to the database.
  * Supports metadata-free endpoints and dynamic Developer/CI authentication.
  */
-server.post('/api/v1/ledger/push', async (request, reply) => {
+server.post('/api/v1/log/push', async (request, reply) => {
   const chainContent = request.body as string;
   if (!chainContent || typeof chainContent !== 'string') {
     return reply.status(400).send({ 
       error: 'Bad Request', 
-      message: 'Ledger chain content must be sent as raw YAML body.' 
+      message: 'Package chain content must be sent as raw YAML body.' 
     });
   }
 
@@ -208,14 +208,14 @@ server.post('/api/v1/ledger/push', async (request, reply) => {
     });
   }
 
-  // 2. Cryptographically verify the in-memory ledger chain
-  request.log.info(`Verifying ledger cryptographic hashes for repository ID: ${resolvedRepo.id}`);
+  // 2. Cryptographically verify the in-memory chain
+  request.log.info(`Verifying chain cryptographic hashes for repository ID: ${resolvedRepo.id}`);
   const report = verifyInMemoryChain(chainContent);
 
   if (!report.valid) {
     return reply.status(422).send({
       error: 'Unprocessable Entity',
-      message: 'Ledger cryptographic verification failed.',
+      message: 'Chain cryptographic verification failed.',
       details: {
         reason: report.reason,
         blockIndex: report.blockIndex,
@@ -226,14 +226,14 @@ server.post('/api/v1/ledger/push', async (request, reply) => {
     });
   }
 
-  // 3. Save the validated ledger into SQLite
+  // 3. Save the validated chain into SQLite
   try {
-    const saved = saveLedger(resolvedRepo.id, chainContent, report.blockCount!, report.lastBlockHash!);
-    request.log.info(`Successfully stored ledger for "${resolvedRepo.owner}/${resolvedRepo.repo}". Total blocks: ${report.blockCount}`);
+    const saved = saveLog(resolvedRepo.id, chainContent, report.blockCount!, report.lastBlockHash!);
+    request.log.info(`Successfully stored log for "${resolvedRepo.owner}/${resolvedRepo.repo}". Total blocks: ${report.blockCount}`);
     
     return {
       success: true,
-      message: 'Ledger pushed and validated successfully.',
+      message: 'Package history pushed and validated successfully.',
       authType,
       repository: `${resolvedRepo.owner}/${resolvedRepo.repo}`,
       blockCount: saved.block_count,
@@ -244,16 +244,16 @@ server.post('/api/v1/ledger/push', async (request, reply) => {
     request.log.error(err);
     return reply.status(500).send({
       error: 'Internal Server Error',
-      message: `Failed to save ledger to database: ${err.message}`
+      message: `Failed to save log history to database: ${err.message}`
     });
   }
 });
 
 /**
- * Pull cryptographically verified ledger from the database.
+ * Pull cryptographically verified package chain from the database.
  * Supports metadata-free requests (token or owner/repo header lookup).
  */
-server.get('/api/v1/ledger/pull', async (request, reply) => {
+server.get('/api/v1/log/pull', async (request, reply) => {
   const tokenHeader = request.headers['x-repo-token'] as string | undefined;
   const authHeader = request.headers['authorization'];
   const targetRepoHeader = request.headers['x-target-repo'] as string | undefined;
@@ -290,16 +290,16 @@ server.get('/api/v1/ledger/pull', async (request, reply) => {
     });
   }
 
-  const ledger = getLedger(resolvedRepo.id);
-  if (!ledger) {
+  const logRecord = getLog(resolvedRepo.id);
+  if (!logRecord) {
     return reply.status(404).send({
       error: 'Not Found',
-      message: `No ledger initialized for repository "${resolvedRepo.owner}/${resolvedRepo.repo}" yet.`
+      message: `No log initialized for repository "${resolvedRepo.owner}/${resolvedRepo.repo}" yet.`
     });
   }
 
   reply.header('Content-Type', 'text/yaml');
-  return ledger.chain_content;
+  return logRecord.chain_content;
 });
 
 /**
