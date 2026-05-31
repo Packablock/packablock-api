@@ -10,15 +10,15 @@ When creating Git commits or performing Git history modifications, agents must *
 
 Instead, each agent must resolve its unique cryptographic identity and override the configuration dynamically for every Git transaction:
 
-1. **Load Environment**: Source the `.env` file in the root workspace `/home/aaron/dev/packablock/.env`.
-2. **Resolve Identity**: Map your assigned role to its corresponding environment variables (e.g. for `Agy` role, load `AGY_GITHUB_NAME`, `AGY_GITHUB_EMAIL`, and `AGY_GITHUB_SIGNING_KEY`).
+1. **Load Environment**: Source the role-specific `.env.<role>` file in the root workspace (e.g. `/home/aaron/dev/packablock/.env.agy` or `/home/aaron/dev/packablock/.env.contributor-1`).
+2. **Resolve Identity**: The keys are standardized in every file (`GITHUB_NAME`, `GITHUB_EMAIL`, `GITHUB_SIGNING_KEY`).
 3. **Dynamic Overrides**: Prefix your Git commit commands with your resolved environment parameters:
 
 ```bash
 git \
-  -c user.name="$<YOUR_ROLE>_GITHUB_NAME" \
-  -c user.email="$<YOUR_ROLE>_GITHUB_EMAIL" \
-  -c user.signingkey="$<YOUR_ROLE>_GITHUB_SIGNING_KEY" \
+  -c user.name="$GITHUB_NAME" \
+  -c user.email="$GITHUB_EMAIL" \
+  -c user.signingkey="$GITHUB_SIGNING_KEY" \
   -c gpg.format=ssh \
   -c commit.gpgsign=true \
   commit -m "Your commit message"
@@ -31,23 +31,18 @@ git \
 The human owner (`aaronbronow`) maintains global terminal session authorization. Do **not** overwrite or log out of the global `gh auth login` state.
 
 To perform remote Git pushes or execute GitHub CLI (`gh`) API requests on behalf of a specific agent:
-1. **Load Environment**: Source the `.env` file in the root workspace `/home/aaron/dev/packablock/.env`.
-2. **Resolve Token**: Dynamically fetch the personal access token (PAT) assigned to your specific role:
-   * **Agy**: `AGY_GITHUB_TOKEN`
-   * **Contributor 1**: `CONTRIBUTOR_1_GITHUB_TOKEN`
-   * **Contributor 2**: `CONTRIBUTOR_2_GITHUB_TOKEN`
-   * **Planner**: `PLANNER_GITHUB_TOKEN`
-   * **Tester**: `TESTER_GITHUB_TOKEN`
+1. **Load Environment**: Source the role-specific `.env.<role>` file in the root workspace.
+2. **Resolve Token**: Standardized as `GITHUB_TOKEN` in every agent's profile.
 3. **Push Authentication**: Prefix all Git pushes or GitHub API calls with your token to force basic authentication, preventing credential caching conflicts with the human owner:
 
 ### 🚀 Git Push Overrides
 ```bash
-GITHUB_TOKEN=$<YOUR_ROLE_GITHUB_TOKEN> git push origin <branch>
+GITHUB_TOKEN=$GITHUB_TOKEN git push origin <branch>
 ```
 
 ### 🔍 GitHub API Overrides
 ```bash
-GH_TOKEN=$<YOUR_ROLE_GITHUB_TOKEN> gh api <endpoint>
+GH_TOKEN=$GITHUB_TOKEN gh api <endpoint>
 ```
 
 ---
