@@ -158,10 +158,10 @@ server.post('/api/v1/log/push', async (request, reply) => {
     const username = userData.login;
     request.log.info(`Authenticated GitHub developer: ${username}`);
 
-    // Call GitHub API to verify collaborator permissions
-    request.log.info(`Checking write permissions for developer ${username} on ${targetRepoHeader}...`);
-    const permRes = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/collaborators/${username}/permission`,
+    // Call GitHub API to verify repository permissions
+    request.log.info(`Checking write permissions for developer on ${targetRepoHeader}...`);
+    const repoRes = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}`,
       {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -171,21 +171,23 @@ server.post('/api/v1/log/push', async (request, reply) => {
       }
     );
 
-    if (!permRes.ok) {
+    if (!repoRes.ok) {
       return reply.status(403).send({
         error: 'Forbidden',
-        message: `Failed to fetch repository collaborator permissions from GitHub. Verify repository path: ${targetRepoHeader}`
+        message: `Failed to fetch repository metadata from GitHub. Verify repository path or access token: ${targetRepoHeader}`
       });
     }
 
-    const permData: any = await permRes.json();
-    const permission = permData.permission; // e.g. "admin", "write", "read", "none"
-    request.log.info(`Developer permission level: ${permission}`);
+    const repoData: any = await repoRes.json();
+    const permissions = repoData.permissions;
+    
+    const hasWriteAccess = permissions && (permissions.push || permissions.admin || permissions.maintain);
+    request.log.info(`Developer permissions on repo: push=${permissions?.push}, admin=${permissions?.admin}, maintain=${permissions?.maintain}`);
 
-    if (permission !== 'admin' && permission !== 'write') {
+    if (!hasWriteAccess) {
       return reply.status(403).send({
         error: 'Forbidden',
-        message: `Insufficient permissions. Developer "${username}" requires "write" or "admin" permission on "${targetRepoHeader}". Got "${permission}".`
+        message: `Insufficient permissions. Developer requires "write", "push", "maintain", or "admin" permission on "${targetRepoHeader}".`
       });
     }
 
