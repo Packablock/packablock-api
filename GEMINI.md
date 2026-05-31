@@ -48,5 +48,12 @@ GH_TOKEN=$GITHUB_TOKEN gh api <endpoint>
 ---
 
 ## 🛠️ Workspace Architecture Mapping
-* **`packablock-client`**: Bun CLI client that automatically reads the local config and pushes cryptographically verified logs to `/api/v1/log/push`.
-* **`packablock-api`**: Fastify SQLite server listening locally on port `3030`. Processes log checks, verifies OIDC runner attestations, and dynamically authorizes contributors.
+* **`packablock-client`** (`https://github.com/Packablock/packablock-client`): Bun CLI client that automatically reads the local config and pushes cryptographically verified logs to `/api/v1/log/push`. Contains the `wmill` integration template at `packablock-client/windmill/`.
+* **`packablock-api`** (`https://github.com/Packablock/packablock-api`): The zero-trust attestation registry server (commonly referred to as the **registry repo**). Fastify SQLite server listening locally on port `3030`.
+* **Windmill Template**: Located in `packablock-client/windmill/` containing the `verify_and_report` flow and scripts.
+
+## 🛠️ Tooling & Infrastructure Context
+* **Windmill CLI (`wmill`)**: Installed and available at `/home/aaron/.nvm/versions/node/v24.14.1/bin/wmill`. Always run from inside the `packablock-client/windmill/` directory.
+* **Lockfile Metadata & Linting**: Run `wmill generate-metadata` inside `packablock-client/windmill/` to rebuild lockfiles/schemas, and `wmill lint` to validate flows.
+* **Pushes to Windmill**: Deploy templates with `bun start wmill-setup` or `wmill sync push` inside the `windmill/` directory.
+
