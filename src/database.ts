@@ -11,6 +11,10 @@ export interface RepositoryRecord {
   repo: string;
   registration_token: string;
   created_at: string;
+  is_premium: number;
+  verification_status: 'none' | 'pending' | 'verified';
+  challenge_nonce: string | null;
+  pinned_public_key: string | null;
 }
 
 export interface LogRecord {
@@ -31,7 +35,7 @@ export function initDb(): void {
   // Enable foreign keys
   db.run('PRAGMA foreign_keys = ON;');
   
-  // Create Repositories table
+  // Create Repositories table with premium support
   db.run(`
     CREATE TABLE IF NOT EXISTS repositories (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,9 +43,27 @@ export function initDb(): void {
       repo TEXT NOT NULL,
       registration_token TEXT UNIQUE NOT NULL,
       created_at TEXT NOT NULL,
+      is_premium INTEGER DEFAULT 0,
+      verification_status TEXT DEFAULT 'none',
+      challenge_nonce TEXT,
+      pinned_public_key TEXT,
       UNIQUE(owner, repo)
     );
   `);
+
+  // Migrate older databases missing the premium columns
+  try {
+    db.run('ALTER TABLE repositories ADD COLUMN is_premium INTEGER DEFAULT 0;');
+  } catch (e) {}
+  try {
+    db.run("ALTER TABLE repositories ADD COLUMN verification_status TEXT DEFAULT 'none';");
+  } catch (e) {}
+  try {
+    db.run('ALTER TABLE repositories ADD COLUMN challenge_nonce TEXT;');
+  } catch (e) {}
+  try {
+    db.run('ALTER TABLE repositories ADD COLUMN pinned_public_key TEXT;');
+  } catch (e) {}
   
   // Create Logs table
   db.run(`
@@ -60,22 +82,67 @@ export function initDb(): void {
 }
 
 /**
- * Registers a new repository and stores its token.
+ * Registers a new repository and stores its token (Standard flow).
  */
 export function registerRepository(owner: string, repo: string, token: string): RepositoryRecord {
   const now = new Date().toISOString();
   
   db.run(`
-    INSERT INTO repositories (owner, repo, registration_token, created_at)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO repositories (owner, repo, registration_token, created_at, is_premium, verification_status)
+    VALUES (?, ?, ?, ?, 0, 'none')
     ON CONFLICT(owner, repo) DO UPDATE SET
       registration_token = excluded.registration_token,
-      created_at = excluded.created_at;
+      created_at = excluded.created_at,
+      is_premium = 0,
+      verification_status = 'none';
   `, [owner.toLowerCase(), repo.toLowerCase(), token, now]);
 
   const query = db.prepare('SELECT * FROM repositories WHERE owner = ? AND repo = ?');
   const record = query.get(owner.toLowerCase(), repo.toLowerCase()) as RepositoryRecord;
   return record;
+}
+
+/**
+ * Registers a premium repository in a pending challenge state.
+ */
+export function registerPremiumPending(
+  owner: string, 
+  repo: string, 
+  nonce: string, 
+  tempToken: string
+): RepositoryRecord {
+  const now = new Date().toISOString();
+  
+  db.run(`
+    INSERT INTO repositories (owner, repo, registration_token, created_at, is_premium, verification_status, challenge_nonce)
+    VALUES (?, ?, ?, ?, 1, 'pending', ?)
+    ON CONFLICT(owner, repo) DO UPDATE SET
+      registration_token = excluded.registration_token,
+      created_at = excluded.created_at,
+      is_premium = 1,
+      verification_status = 'pending',
+      challenge_nonce = excluded.challenge_nonce;
+  `, [owner.toLowerCase(), repo.toLowerCase(), tempToken, now, nonce]);
+
+  const query = db.prepare('SELECT * FROM repositories WHERE owner = ? AND repo = ?');
+  const record = query.get(owner.toLowerCase(), repo.toLowerCase()) as RepositoryRecord;
+  return record;
+}
+
+/**
+ * Promotes verification status, pins the verified public key, and sets active token.
+ */
+export function verifyAndActivateRepository(
+  repoId: number, 
+  status: 'verified' | 'pending' | 'none', 
+  publicKey: string | null,
+  activeToken: string
+): void {
+  db.run(`
+    UPDATE repositories 
+    SET verification_status = ?, pinned_public_key = ?, registration_token = ?
+    WHERE id = ?
+  `, [status, publicKey, activeToken, repoId]);
 }
 
 /**

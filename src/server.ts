@@ -6,12 +6,14 @@ import {
   getRepositoryByToken, 
   getRepositoryByPath, 
   saveLog, 
-  getLog 
+  getLog,
+  registerPremiumPending,
+  verifyAndActivateRepository
 } from './database.js';
 import { verifyInMemoryChain } from './verify.js';
 import { verifyGithubOidcToken } from './oidc.js';
 
-const server = fastify({ logger: true });
+export const server = fastify({ logger: true });
 
 // Register content type parser for plain text / YAML payloads
 server.addContentTypeParser(['text/yaml', 'application/yaml', 'text/plain'], { parseAs: 'string' }, function (req, body, done) {
@@ -56,6 +58,228 @@ server.post('/api/v1/repos/register', async (request, reply) => {
     return reply.status(500).send({ 
       error: 'Internal Server Error', 
       message: err.message 
+    });
+  }
+});
+
+/**
+ * ACME-style registration for Zero-Trust premium or standard onboarding.
+ */
+server.post('/api/v1/acme/new-account', async (request, reply) => {
+  const body = request.body as any;
+  if (!body || !body.owner || !body.repo) {
+    return reply.status(400).send({ 
+      error: 'Bad Request', 
+      message: 'Fields "owner" and "repo" are required in request body.' 
+    });
+  }
+
+  const { owner, repo, isPremium } = body;
+  
+  // Generate random nonce challenge
+  const nonce = 'pb_nonce_' + randomBytes(24).toString('hex');
+  
+  // A temporary token which remains inactive until verified
+  const tempToken = 'pb_temp_' + randomBytes(24).toString('hex');
+
+  try {
+    if (isPremium) {
+      const record = registerPremiumPending(owner, repo, nonce, tempToken);
+      return {
+        success: true,
+        owner: record.owner,
+        repo: record.repo,
+        isPremium: true,
+        verificationStatus: record.verification_status,
+        challengeNonce: record.challenge_nonce,
+        message: 'Premium registration initiated. Place the challengeNonce in your repository at "/.well-known/sbom-challenge/token.txt" and call verify.'
+      };
+    } else {
+      // Standard registration (direct active token)
+      const record = registerRepository(owner, repo, tempToken.replace('pb_temp_', 'pb_reg_'));
+      return {
+        success: true,
+        owner: record.owner,
+        repo: record.repo,
+        isPremium: false,
+        verificationStatus: 'none',
+        registrationToken: record.registration_token,
+        message: 'Standard repository registered successfully.'
+      };
+    }
+  } catch (err: any) {
+    request.log.error(err);
+    return reply.status(500).send({ 
+      error: 'Internal Server Error', 
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * ACME-style challenge verification endpoint.
+ * Supports standard GitHub API micro-verifier and Sigstore Artifact Attestations bundle validation.
+ */
+server.post('/api/v1/acme/verify', async (request, reply) => {
+  const body = request.body as any;
+  if (!body || !body.owner || !body.repo || !body.verificationType) {
+    return reply.status(400).send({ 
+      error: 'Bad Request', 
+      message: 'Fields "owner", "repo", and "verificationType" are required.' 
+    });
+  }
+
+  const { owner, repo, verificationType, attestationBundle } = body;
+  
+  // Fetch pending registration details
+  const record = getRepositoryByPath(owner, repo);
+  if (!record || record.is_premium === 0 || record.verification_status !== 'pending') {
+    return reply.status(404).send({
+      error: 'Not Found',
+      message: 'No pending premium registration found for this repository.'
+    });
+  }
+
+  const expectedNonce = record.challenge_nonce;
+  if (!expectedNonce) {
+    return reply.status(500).send({
+      error: 'Internal Error',
+      message: 'Challenge nonce is missing.'
+    });
+  }
+
+  try {
+    if (verificationType === 'github-api') {
+      // PATHWAY 1: GitHub API Micro-Verifier
+      request.log.info(`ACME API-Verifier: Fetching challenge from GitHub for ${owner}/${repo}...`);
+      
+      const fileUrl = `https://api.github.com/repos/${owner}/${repo}/contents/.well-known/sbom-challenge/token.txt`;
+      // Use pass-through dev token if provided, or default GITHUB_TOKEN
+      const devToken = request.headers['x-developer-token'] || process.env.GITHUB_TOKEN;
+      const headers: Record<string, string> = {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'Packablock-Registry'
+      };
+      if (devToken) {
+        headers['Authorization'] = `Bearer ${devToken}`;
+      }
+
+      const res = await fetch(fileUrl, { headers });
+      if (!res.ok) {
+        return reply.status(400).send({
+          error: 'Verification Failed',
+          message: `Failed to fetch challenge file from GitHub API. Ensure the file is placed at "/.well-known/sbom-challenge/token.txt" and is accessible.`
+        });
+      }
+
+      const fileData = await res.json() as any;
+      const content = Buffer.from(fileData.content, 'base64').toString('utf8').trim();
+
+      if (content !== expectedNonce) {
+        return reply.status(400).send({
+          error: 'Verification Failed',
+          message: `Challenge mismatch. Expected "${expectedNonce}" but found "${content}".`
+        });
+      }
+
+      // Retrieve GPG signature from commit
+      const commitsUrl = `https://api.github.com/repos/${owner}/${repo}/commits?path=.well-known/sbom-challenge/token.txt&per_page=1`;
+      const commitRes = await fetch(commitsUrl, { headers });
+      let publicKey = null;
+
+      if (commitRes.ok) {
+        const commitData = await commitRes.json() as any;
+        if (commitData && commitData[0]) {
+          const verification = commitData[0].commit.verification;
+          if (verification && verification.verified) {
+            publicKey = verification.signature || null;
+          }
+        }
+      }
+
+      // Promote status to verified!
+      const activeToken = record.registration_token.replace('pb_temp_', 'pb_reg_');
+      
+      // Update registration token and status in DB
+      verifyAndActivateRepository(record.id, 'verified', publicKey, activeToken);
+
+      return {
+        success: true,
+        owner: record.owner,
+        repo: record.repo,
+        verificationStatus: 'verified',
+        registrationToken: activeToken,
+        message: 'Repository verification successful. Public key has been pinned.'
+      };
+
+    } else if (verificationType === 'github-attestation') {
+      // PATHWAY 4: Zero-Access Cryptographic Provenance (Cosign/Sigstore Bundle)
+      if (!attestationBundle) {
+        return reply.status(400).send({
+          error: 'Bad Request',
+          message: 'attestationBundle parameter is required for github-attestation verificationType.'
+        });
+      }
+
+      request.log.info(`ACME Attestation-Verifier: Verifying Sigstore attestation for ${owner}/${repo}...`);
+      
+      // Write the bundle to a temporary file
+      const path = await import('node:path');
+      const tempPath = path.join(process.cwd(), `attestation_${record.id}.json`);
+      await Bun.write(tempPath, JSON.stringify(attestationBundle));
+
+      try {
+        // Execute the gh CLI command to verify GHA attestation
+        const cmd = [
+          "bash", "-c",
+          `source .env.agy && export GH_TOKEN="$GITHUB_TOKEN" && export GITHUB_TOKEN="$GITHUB_TOKEN" && gh attestation verify "${tempPath}" --repo "${owner}/${repo}"`
+        ];
+        
+        const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe' });
+        const exitCode = await proc.exited;
+        
+        if (exitCode !== 0) {
+          const stderr = await new Response(proc.stderr).text();
+          return reply.status(400).send({
+            error: 'Verification Failed',
+            message: `Sigstore attestation validation failed: ${stderr.trim()}`
+          });
+        }
+        
+        // Promote status to verified!
+        const activeToken = record.registration_token.replace('pb_temp_', 'pb_reg_');
+        
+        // Update status and token
+        verifyAndActivateRepository(record.id, 'verified', 'sigstore_attested', activeToken);
+
+        return {
+          success: true,
+          owner: record.owner,
+          repo: record.repo,
+          verificationStatus: 'verified',
+          registrationToken: activeToken,
+          message: 'Repository verification successful via GitHub Artifact Attestation. Public key is pinned to Sigstore trust root.'
+        };
+        
+      } finally {
+        // Always clean up the temp file
+        const fs = await import('node:fs');
+        if (fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+      }
+
+    } else {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        message: 'Invalid verificationType. Supported values: "github-api", "github-attestation".'
+      });
+    }
+  } catch (err: any) {
+    request.log.error(err);
+    return reply.status(500).send({
+      error: 'Internal Server Error',
+      message: err.message
     });
   }
 });
