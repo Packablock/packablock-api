@@ -305,6 +305,129 @@ server.get('/api/v1/log/pull', async (request, reply) => {
 });
 
 /**
+ * Premium API: Retrieve latest upstream versions for packages.
+ * Requires valid auth token (repo token or developer Bearer OAuth token).
+ */
+server.post('/api/v1/packages/latest', async (request, reply) => {
+  const body = request.body as any;
+  const packages = body?.packages as string[] | undefined;
+  if (!packages || !Array.isArray(packages)) {
+    return reply.status(400).send({
+      error: 'Bad Request',
+      message: 'Body must contain a "packages" array of strings.'
+    });
+  }
+
+  // Extract auth headers
+  const authHeader = request.headers['authorization'];
+  const repoTokenHeader = request.headers['x-repo-token'] as string | undefined;
+  const targetRepoHeader = request.headers['x-target-repo'] as string | undefined;
+
+  let token = '';
+  if (repoTokenHeader) {
+    token = repoTokenHeader;
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  }
+
+  if (!token) {
+    return reply.status(401).send({
+      error: 'Unauthorized',
+      message: 'Authentication required. Upstream drift analysis is a premium feature.'
+    });
+  }
+
+  // Validate the token using SQLite check (CI registration token check)
+  const dbRepo = getRepositoryByToken(token);
+  let isAuthorized = false;
+
+  if (dbRepo) {
+    isAuthorized = true;
+  } else {
+    // Check developer OAuth token
+    if (!targetRepoHeader) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        message: 'Personal OAuth requests require "X-Target-Repo: owner/repo" header.'
+      });
+    }
+
+    const [owner, repo] = targetRepoHeader.split('/');
+    if (!owner || !repo) {
+      return reply.status(400).send({
+        error: 'Bad Request',
+        message: 'Invalid "X-Target-Repo" format.'
+      });
+    }
+
+    // Call GitHub API to identify the user
+    try {
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': 'Packablock-API'
+        }
+      });
+
+      if (userRes.ok) {
+        // Check write permission
+        const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'Packablock-API'
+          }
+        });
+
+        if (repoRes.ok) {
+          const repoData: any = await repoRes.json();
+          const permissions = repoData.permissions;
+          if (permissions && (permissions.push || permissions.admin || permissions.maintain)) {
+            isAuthorized = true;
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore network errors, isAuthorized remains false
+    }
+  }
+
+  if (!isAuthorized) {
+    return reply.status(403).send({
+      error: 'Forbidden',
+      message: '⭐ Premium Feature: Upstream drift analysis is only available to active paying customers of the hosted Packablock Registry.'
+    });
+  }
+
+  // User is authorized! Fetch latest versions of the requested packages from NPM registry
+  const results: Record<string, string> = {};
+
+  await Promise.all(
+    packages.map(async (pkg) => {
+      try {
+        const res = await fetch(`https://registry.npmjs.org/${pkg}/latest`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          if (data && data.version) {
+            results[pkg] = data.version;
+          }
+        }
+      } catch (err) {
+        // Fallback or ignore if fetch fails
+      }
+    })
+  );
+
+  return {
+    success: true,
+    packages: results
+  };
+});
+
+/**
  * Starts the server on the specified port.
  */
 export async function startServer(port = 3000): Promise<void> {
