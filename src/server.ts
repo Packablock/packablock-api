@@ -947,6 +947,173 @@ server.get("/api/v1/repo/:owner/:repo/sigs", async (request, reply) => {
 });
 
 /**
+ * GET /api/v1/repo/:owner/:repo/tree
+ * Returns a structured JSON visualization tree and flat graph representing the package chain blocks.
+ */
+server.get("/api/v1/repo/:owner/:repo/tree", async (request, reply) => {
+	const { owner, repo } = request.params as any;
+	if (!owner || !repo) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Fields 'owner' and 'repo' are required in route parameters.",
+		});
+	}
+
+	const repoRecord = getRepositoryByPath(owner, repo);
+	if (!repoRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "Repository not registered.",
+		});
+	}
+
+	const logRecord = getLog(repoRecord.id);
+	if (!logRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "No package history log exists for this repository yet.",
+		});
+	}
+
+	try {
+		const docs = splitRawDocuments(logRecord.chain_content);
+		const blockCount = docs.length / 2;
+
+		interface TreeNode {
+			id: string;
+			name: string;
+			blockIndex?: number;
+			timestamp?: string;
+			dataHash?: string;
+			metaHash?: string;
+			prevMetaHash?: string;
+			committer?: string | null;
+			type: "root" | "block" | "rollover";
+			packagesCount?: number;
+			children: TreeNode[];
+		}
+
+		interface GraphNode {
+			id: string;
+			label: string;
+			blockIndex?: number;
+			type: "root" | "block" | "rollover";
+			packagesCount?: number;
+		}
+
+		interface GraphLink {
+			source: string;
+			target: string;
+		}
+
+		const nodesMap = new Map<string, TreeNode>();
+		const flatNodes: GraphNode[] = [];
+		const flatLinks: GraphLink[] = [];
+
+		// Determine the base genesis hash
+		let firstPrevHash =
+			"0000000000000000000000000000000000000000000000000000000000000000";
+		if (blockCount > 0) {
+			const metaDocStr = docs[1];
+			if (metaDocStr !== undefined) {
+				const parsedMeta = YAML.parse(metaDocStr)?.["$yaml-chain-meta"];
+				if (parsedMeta?.prev_meta_hash) {
+					firstPrevHash = parsedMeta.prev_meta_hash;
+				}
+			}
+		}
+
+		// Create root node
+		const rootNode: TreeNode = {
+			id: firstPrevHash,
+			name: "Genesis Anchor",
+			type: "root",
+			children: [],
+		};
+		nodesMap.set(firstPrevHash, rootNode);
+		flatNodes.push({
+			id: firstPrevHash,
+			label: "Genesis Anchor",
+			type: "root",
+		});
+
+		for (let i = 0; i < blockCount; i++) {
+			const dataDocStr = docs[2 * i];
+			const metaDocStr = docs[2 * i + 1];
+			if (dataDocStr === undefined || metaDocStr === undefined) continue;
+
+			const parsedData = YAML.parse(dataDocStr);
+			const parsedMeta = YAML.parse(metaDocStr)?.["$yaml-chain-meta"];
+
+			if (parsedMeta) {
+				const metaHash = parsedMeta.meta_hash;
+				const prevMetaHash = parsedMeta.prev_meta_hash || firstPrevHash;
+				const packagesCount = parsedData?.packages
+					? Object.keys(parsedData.packages).length
+					: 0;
+				const isRollover = !!parsedData?.genesis_rollover;
+
+				const node: TreeNode = {
+					id: metaHash,
+					name: `Block #${parsedMeta.block_index}`,
+					blockIndex: parsedMeta.block_index,
+					timestamp: parsedMeta.timestamp,
+					dataHash: parsedMeta.data_hash,
+					metaHash: metaHash,
+					prevMetaHash: prevMetaHash,
+					committer: parsedMeta.committer || null,
+					type: isRollover ? "rollover" : "block",
+					packagesCount,
+					children: [],
+				};
+
+				nodesMap.set(metaHash, node);
+				flatNodes.push({
+					id: metaHash,
+					label: `Block #${parsedMeta.block_index}`,
+					blockIndex: parsedMeta.block_index,
+					type: isRollover ? "rollover" : "block",
+					packagesCount,
+				});
+
+				flatLinks.push({
+					source: prevMetaHash,
+					target: metaHash,
+				});
+			}
+		}
+
+		// Build hierarchy
+		for (const [_, node] of nodesMap) {
+			if (node.type === "root") continue;
+			const parentHash = node.prevMetaHash;
+			if (parentHash && nodesMap.has(parentHash)) {
+				nodesMap.get(parentHash)!.children.push(node);
+			} else {
+				// If parent not in map (should not happen in a valid chain), attach to root
+				rootNode.children.push(node);
+			}
+		}
+
+		return {
+			success: true,
+			repository: `${repoRecord.owner}/${repoRecord.repo}`,
+			blockCount,
+			tree: rootNode,
+			graph: {
+				nodes: flatNodes,
+				links: flatLinks,
+			},
+		};
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: `Failed to generate visualization tree: ${err.message}`,
+		});
+	}
+});
+
+/**
  * POST /api/v1/repo/:owner/:repo/webhooks
  * Registers a new webhook URL.
  */

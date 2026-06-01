@@ -504,4 +504,133 @@ describe("Registry Auditing and Webhooks", () => {
 			expect(signatureHeader).toBe(calculatedSig);
 		});
 	});
+
+	describe("Tree Visualization Endpoint", () => {
+		const treeRepo = "tree-test-repo";
+		let treeToken = "";
+
+		beforeAll(async () => {
+			const res = await server.inject({
+				method: "POST",
+				url: "/api/v1/acme/new-account",
+				payload: {
+					owner,
+					repo: treeRepo,
+					isPremium: false,
+				},
+			});
+			const data = JSON.parse(res.body);
+			treeToken = data.registrationToken;
+		});
+
+		it("should return a correctly structured tree and graph for a multi-block chain", async () => {
+			// Construct 2 blocks
+			const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
+				packages: {
+					"package-a": { version: "1.0.0" },
+				},
+			});
+
+			const block1 = createValidChainPair(1, block0.metaHash, {
+				packages: {
+					"package-a": { version: "1.0.0" },
+					"package-b": { version: "2.0.0" },
+				},
+			});
+
+			const fullChain = `${block0.chainFragment}\n${block1.chainFragment}\n`;
+
+			// Push chain
+			const pushRes = await server.inject({
+				method: "POST",
+				url: "/api/v1/log/push",
+				headers: {
+					"X-Repo-Token": treeToken,
+					"Content-Type": "text/plain",
+				},
+				body: fullChain,
+			});
+			expect(pushRes.statusCode).toBe(200);
+
+			// Call GET /tree
+			const treeRes = await server.inject({
+				method: "GET",
+				url: `/api/v1/repo/${owner}/${treeRepo}/tree`,
+			});
+
+			expect(treeRes.statusCode).toBe(200);
+			const treeData = JSON.parse(treeRes.body);
+			expect(treeData.success).toBe(true);
+			expect(treeData.repository).toBe(`${owner}/${treeRepo}`);
+			expect(treeData.blockCount).toBe(2);
+
+			// Assert Hierarchical Tree
+			expect(treeData.tree).toBeDefined();
+			expect(treeData.tree.id).toBe(GENESIS_PREV_HASH);
+			expect(treeData.tree.type).toBe("root");
+			expect(treeData.tree.children).toHaveLength(1);
+
+			// Assert Block 0 node
+			const node0 = treeData.tree.children[0];
+			expect(node0.id).toBe(block0.metaHash);
+			expect(node0.name).toBe("Block #0");
+			expect(node0.blockIndex).toBe(0);
+			expect(node0.type).toBe("block");
+			expect(node0.packagesCount).toBe(1);
+			expect(node0.children).toHaveLength(1);
+
+			// Assert Block 1 node
+			const node1 = node0.children[0];
+			expect(node1.id).toBe(block1.metaHash);
+			expect(node1.name).toBe("Block #1");
+			expect(node1.blockIndex).toBe(1);
+			expect(node1.type).toBe("block");
+			expect(node1.packagesCount).toBe(2);
+			expect(node1.children).toHaveLength(0);
+
+			// Assert Flat Graph structure
+			expect(treeData.graph).toBeDefined();
+			expect(treeData.graph.nodes).toHaveLength(3); // Root + Block 0 + Block 1
+			expect(treeData.graph.links).toHaveLength(2); // Link from Root->B0, B0->B1
+
+			// Verify flat nodes
+			expect(treeData.graph.nodes[0].id).toBe(GENESIS_PREV_HASH);
+			expect(treeData.graph.nodes[0].type).toBe("root");
+
+			expect(treeData.graph.nodes[1].id).toBe(block0.metaHash);
+			expect(treeData.graph.nodes[1].label).toBe("Block #0");
+			expect(treeData.graph.nodes[1].type).toBe("block");
+
+			expect(treeData.graph.nodes[2].id).toBe(block1.metaHash);
+			expect(treeData.graph.nodes[2].label).toBe("Block #1");
+			expect(treeData.graph.nodes[2].type).toBe("block");
+
+			// Verify flat links
+			expect(treeData.graph.links[0].source).toBe(GENESIS_PREV_HASH);
+			expect(treeData.graph.links[0].target).toBe(block0.metaHash);
+
+			expect(treeData.graph.links[1].source).toBe(block0.metaHash);
+			expect(treeData.graph.links[1].target).toBe(block1.metaHash);
+		});
+
+		it("should return 404 when repository has no package history", async () => {
+			const emptyRepo = "empty-tree-repo";
+			await server.inject({
+				method: "POST",
+				url: "/api/v1/acme/new-account",
+				payload: {
+					owner,
+					repo: emptyRepo,
+					isPremium: false,
+				},
+			});
+
+			const treeRes = await server.inject({
+				method: "GET",
+				url: `/api/v1/repo/${owner}/${emptyRepo}/tree`,
+			});
+
+			expect(treeRes.statusCode).toBe(404);
+		});
+	});
 });
