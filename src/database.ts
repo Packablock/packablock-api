@@ -1,9 +1,8 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
 
-const DB_FILE = path.join(process.cwd(), "packablock.sqlite");
-
 let db: Database;
+let DB_FILE = "";
 
 export interface RepositoryRecord {
 	id: number;
@@ -26,10 +25,24 @@ export interface LogRecord {
 	updated_at: string;
 }
 
+export interface WebhookRecord {
+	id: number;
+	repo_id: number;
+	url: string;
+	secret: string | null;
+	created_at: string;
+}
+
 /**
  * Initializes the SQLite database and ensures the schema exists.
  */
 export function initDb(): void {
+	DB_FILE = process.env.DATABASE_FILE
+		? path.isAbsolute(process.env.DATABASE_FILE)
+			? process.env.DATABASE_FILE
+			: path.join(process.cwd(), process.env.DATABASE_FILE)
+		: path.join(process.cwd(), "packablock.sqlite");
+
 	db = new Database(DB_FILE, { create: true });
 
 	// Enable foreign keys
@@ -77,6 +90,17 @@ export function initDb(): void {
       last_block_hash TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(repo_id)
+    );
+  `);
+
+	// Create Webhooks table
+	db.run(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      secret TEXT,
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -234,4 +258,45 @@ export function getLog(repoId: number): LogRecord | null {
 	const query = db.prepare("SELECT * FROM logs WHERE repo_id = ?");
 	const record = query.get(repoId) as LogRecord | null;
 	return record;
+}
+
+/**
+ * Adds a new webhook endpoint for a repository.
+ */
+export function addWebhook(
+	repoId: number,
+	url: string,
+	secret: string | null,
+): WebhookRecord {
+	const now = new Date().toISOString();
+	const result = db.run(
+		`
+    INSERT INTO webhooks (repo_id, url, secret, created_at)
+    VALUES (?, ?, ?, ?);
+  `,
+		[repoId, url, secret, now],
+	);
+
+	const recordId = result.lastInsertRowid as number;
+	const query = db.prepare("SELECT * FROM webhooks WHERE id = ?");
+	return query.get(recordId) as WebhookRecord;
+}
+
+/**
+ * Lists all registered webhooks for a repository.
+ */
+export function getWebhooks(repoId: number): WebhookRecord[] {
+	const query = db.prepare("SELECT * FROM webhooks WHERE repo_id = ?");
+	return query.all(repoId) as WebhookRecord[];
+}
+
+/**
+ * Deletes a registered webhook for a repository.
+ */
+export function deleteWebhook(id: number, repoId: number): boolean {
+	const result = db.run("DELETE FROM webhooks WHERE id = ? AND repo_id = ?;", [
+		id,
+		repoId,
+	]);
+	return result.changes > 0;
 }

@@ -1,5 +1,6 @@
 import fastify from "fastify";
 import { randomBytes } from "node:crypto";
+import YAML from "yaml";
 import {
 	initDb,
 	registerRepository,
@@ -9,8 +10,11 @@ import {
 	getLog,
 	registerPremiumPending,
 	verifyAndActivateRepository,
+	addWebhook,
+	getWebhooks,
+	deleteWebhook,
 } from "./database.js";
-import { verifyInMemoryChain } from "./verify.js";
+import { verifyInMemoryChain, splitRawDocuments } from "./verify.js";
 import { verifyGithubOidcToken } from "./oidc.js";
 
 export const server = fastify({ logger: true });
@@ -327,6 +331,55 @@ server.post("/api/v1/acme/verify", async (request, reply) => {
 });
 
 /**
+ * Helper to dispatch webhook payloads asynchronously with optional HMAC-SHA256 signature verification.
+ */
+async function dispatchWebhooks(
+	repoId: number,
+	owner: string,
+	repo: string,
+	event: string,
+	details: any,
+): Promise<void> {
+	const hooks = getWebhooks(repoId);
+	if (hooks.length === 0) return;
+
+	const payload = {
+		event,
+		repository: `${owner}/${repo}`,
+		timestamp: new Date().toISOString(),
+		details,
+	};
+
+	const bodyStr = JSON.stringify(payload);
+
+	for (const hook of hooks) {
+		const headers: Record<string, string> = {
+			"Content-Type": "application/json",
+			"User-Agent": "Packablock-Registry-Webhooks",
+		};
+
+		if (hook.secret) {
+			const crypto = await import("node:crypto");
+			const signature = crypto
+				.createHmac("sha256", hook.secret)
+				.update(bodyStr)
+				.digest("hex");
+			headers["X-Packablock-Signature"] = signature;
+		}
+
+		// Asynchronous background fetch trigger (zero blocking to rest of request)
+		fetch(hook.url, {
+			method: "POST",
+			headers,
+			body: bodyStr,
+			signal: AbortSignal.timeout(5000),
+		}).catch((_err) => {
+			console.error(`[Webhook Alert] Failed to dispatch to ${hook.url}`);
+		});
+	}
+}
+
+/**
  * Push cryptographically verified package chain to the database.
  * Supports metadata-free endpoints and dynamic Developer/CI authentication.
  */
@@ -501,6 +554,19 @@ server.post("/api/v1/log/push", async (request, reply) => {
 	const report = verifyInMemoryChain(chainContent);
 
 	if (!report.valid) {
+		// Dispatch failed push notification alerts to webhooks
+		dispatchWebhooks(
+			resolvedRepo.id,
+			resolvedRepo.owner,
+			resolvedRepo.repo,
+			"push_failed_tampered",
+			{
+				reason: report.reason,
+				blockIndex: report.blockIndex,
+				tamperedComponent: report.tamperedComponent,
+			},
+		);
+
 		return reply.status(422).send({
 			error: "Unprocessable Entity",
 			message: "Chain cryptographic verification failed.",
@@ -524,6 +590,18 @@ server.post("/api/v1/log/push", async (request, reply) => {
 		);
 		request.log.info(
 			`Successfully stored log for "${resolvedRepo.owner}/${resolvedRepo.repo}". Total blocks: ${report.blockCount}`,
+		);
+
+		// Dispatch push success alerts to webhooks
+		dispatchWebhooks(
+			resolvedRepo.id,
+			resolvedRepo.owner,
+			resolvedRepo.repo,
+			"push_success",
+			{
+				blockCount: saved.block_count,
+				lastBlockHash: saved.last_block_hash,
+			},
 		);
 
 		return {
@@ -732,6 +810,261 @@ server.post("/api/v1/packages/latest", async (request, reply) => {
 		packages: results,
 	};
 });
+
+/**
+ * GET /api/v1/repo/:owner/:repo/history
+ * Chronological sequence of block modifications, timestamps, and baselines.
+ */
+server.get("/api/v1/repo/:owner/:repo/history", async (request, reply) => {
+	const { owner, repo } = request.params as any;
+	if (!owner || !repo) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Fields 'owner' and 'repo' are required in route parameters.",
+		});
+	}
+
+	const repoRecord = getRepositoryByPath(owner, repo);
+	if (!repoRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "Repository not registered.",
+		});
+	}
+
+	const logRecord = getLog(repoRecord.id);
+	if (!logRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "No package history log exists for this repository yet.",
+		});
+	}
+
+	try {
+		const docs = splitRawDocuments(logRecord.chain_content);
+		const blockCount = docs.length / 2;
+		const history = [];
+
+		for (let i = 0; i < blockCount; i++) {
+			const dataDocStr = docs[2 * i];
+			const metaDocStr = docs[2 * i + 1];
+			if (dataDocStr === undefined || metaDocStr === undefined) continue;
+
+			const parsedData = YAML.parse(dataDocStr);
+			const parsedMeta = YAML.parse(metaDocStr)?.["$yaml-chain-meta"];
+
+			if (parsedMeta) {
+				history.push({
+					blockIndex: parsedMeta.block_index,
+					timestamp: parsedMeta.timestamp,
+					dataHash: parsedMeta.data_hash,
+					metaHash: parsedMeta.meta_hash,
+					prevMetaHash: parsedMeta.prev_meta_hash,
+					packages: parsedData?.packages || {},
+				});
+			}
+		}
+
+		return {
+			success: true,
+			repository: `${repoRecord.owner}/${repoRecord.repo}`,
+			blockCount,
+			history,
+		};
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: `Failed to parse log history: ${err.message}`,
+		});
+	}
+});
+
+/**
+ * GET /api/v1/repo/:owner/:repo/sigs
+ * Historical signature auditing.
+ */
+server.get("/api/v1/repo/:owner/:repo/sigs", async (request, reply) => {
+	const { owner, repo } = request.params as any;
+	if (!owner || !repo) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Fields 'owner' and 'repo' are required in route parameters.",
+		});
+	}
+
+	const repoRecord = getRepositoryByPath(owner, repo);
+	if (!repoRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "Repository not registered.",
+		});
+	}
+
+	const logRecord = getLog(repoRecord.id);
+	if (!logRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "No package history log exists for this repository yet.",
+		});
+	}
+
+	try {
+		const docs = splitRawDocuments(logRecord.chain_content);
+		const blockCount = docs.length / 2;
+		const signatures = [];
+
+		for (let i = 0; i < blockCount; i++) {
+			const metaDocStr = docs[2 * i + 1];
+			if (metaDocStr === undefined) continue;
+
+			const parsedMeta = YAML.parse(metaDocStr)?.["$yaml-chain-meta"];
+
+			if (parsedMeta) {
+				signatures.push({
+					blockIndex: parsedMeta.block_index,
+					timestamp: parsedMeta.timestamp,
+					metaHash: parsedMeta.meta_hash,
+					signingStrategy: parsedMeta.hashing_strategy || "raw",
+					signature: parsedMeta.signature || null,
+					committer: parsedMeta.committer || null,
+					oidcClaims: parsedMeta.oidc_claims || null,
+				});
+			}
+		}
+
+		return {
+			success: true,
+			repository: `${repoRecord.owner}/${repoRecord.repo}`,
+			blockCount,
+			signatures,
+		};
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: `Failed to audit signatures: ${err.message}`,
+		});
+	}
+});
+
+/**
+ * POST /api/v1/repo/:owner/:repo/webhooks
+ * Registers a new webhook URL.
+ */
+server.post("/api/v1/repo/:owner/:repo/webhooks", async (request, reply) => {
+	const { owner, repo } = request.params as any;
+	const body = request.body as any;
+	const url = body?.url as string | undefined;
+	const secret = body?.secret as string | undefined;
+
+	if (!owner || !repo || !url) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Fields 'owner', 'repo', and body parameter 'url' are required.",
+		});
+	}
+
+	const repoRecord = getRepositoryByPath(owner, repo);
+	if (!repoRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "Repository not registered.",
+		});
+	}
+
+	try {
+		const webhook = addWebhook(repoRecord.id, url, secret || null);
+		return {
+			success: true,
+			message: "Webhook registered successfully.",
+			webhook,
+		};
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+/**
+ * GET /api/v1/repo/:owner/:repo/webhooks
+ * Lists all registered webhooks for a repository.
+ */
+server.get("/api/v1/repo/:owner/:repo/webhooks", async (request, reply) => {
+	const { owner, repo } = request.params as any;
+	if (!owner || !repo) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Fields 'owner' and 'repo' are required.",
+		});
+	}
+
+	const repoRecord = getRepositoryByPath(owner, repo);
+	if (!repoRecord) {
+		return reply.status(404).send({
+			error: "Not Found",
+			message: "Repository not registered.",
+		});
+	}
+
+	try {
+		const webhooks = getWebhooks(repoRecord.id);
+		return {
+			success: true,
+			webhooks,
+		};
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+/**
+ * DELETE /api/v1/repo/:owner/:repo/webhooks/:id
+ * Deletes a registered webhook.
+ */
+server.delete(
+	"/api/v1/repo/:owner/:repo/webhooks/:id",
+	async (request, reply) => {
+		const { owner, repo, id } = request.params as any;
+		if (!owner || !repo || !id) {
+			return reply.status(400).send({
+				error: "Bad Request",
+				message: "Fields 'owner', 'repo', and 'id' are required.",
+			});
+		}
+
+		const repoRecord = getRepositoryByPath(owner, repo);
+		if (!repoRecord) {
+			return reply.status(404).send({
+				error: "Not Found",
+				message: "Repository not registered.",
+			});
+		}
+
+		try {
+			const deleted = deleteWebhook(parseInt(id, 10), repoRecord.id);
+			if (!deleted) {
+				return reply.status(404).send({
+					error: "Not Found",
+					message: "Webhook entry not found or unauthorized.",
+				});
+			}
+
+			return {
+				success: true,
+				message: "Webhook deleted successfully.",
+			};
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 /**
  * Starts the server on the specified port.

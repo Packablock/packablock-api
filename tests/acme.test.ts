@@ -1,10 +1,35 @@
-import { describe, it, expect, beforeAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { server } from "../src/server.ts";
 import { initDb } from "../src/database.ts";
+import fs from "node:fs";
+import path from "node:path";
+
+const TEST_DB = "packablock_test_acme.sqlite";
 
 beforeAll(() => {
-	// Ensure DB and schema are initialized for in-memory testing
+	// Set isolated test database environment variable
+	process.env.DATABASE_FILE = TEST_DB;
+
+	// Ensure any stale database file is removed
+	const dbFile = path.join(process.cwd(), TEST_DB);
+	if (fs.existsSync(dbFile)) {
+		try {
+			fs.unlinkSync(dbFile);
+		} catch (e) {}
+	}
+
+	// Initialize database
 	initDb();
+});
+
+afterAll(() => {
+	// Teardown and clean up the test database file
+	const dbFile = path.join(process.cwd(), TEST_DB);
+	if (fs.existsSync(dbFile)) {
+		try {
+			fs.unlinkSync(dbFile);
+		} catch (e) {}
+	}
 });
 
 describe("Registry ACME Verification Challenge Endpoints", () => {
