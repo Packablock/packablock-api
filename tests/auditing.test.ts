@@ -407,8 +407,16 @@ describe("Registry Auditing and Webhooks", () => {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 
 			// Assert webhook was fired
-			expect(fetchedPayloads).toHaveLength(1);
-			const { url, options } = fetchedPayloads[0]!;
+			expect(fetchedPayloads.length).toBeGreaterThanOrEqual(1);
+			const successPayload = fetchedPayloads.find((p) => {
+				try {
+					return JSON.parse(p.options.body).event === "push_success";
+				} catch (e) {
+					return false;
+				}
+			});
+			expect(successPayload).toBeDefined();
+			const { url, options } = successPayload!;
 			expect(url).toBe("http://webhook-target.local/alert");
 			expect(options.method).toBe("POST");
 			expect(options.headers["Content-Type"]).toBe("application/json");

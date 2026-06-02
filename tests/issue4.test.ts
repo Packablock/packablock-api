@@ -1,10 +1,4 @@
-import {
-	describe,
-	it,
-	expect,
-	beforeAll,
-	afterAll,
-} from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { server } from "../src/server.ts";
 import { initDb, getRepositoryByPath } from "../src/database.ts";
 import {

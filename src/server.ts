@@ -41,7 +41,8 @@ export function resolveIdentityBadge(parsedMeta: any): string | null {
 	if (parsedMeta.oidc_claims?.actor) {
 		return `OIDC: ${parsedMeta.oidc_claims.actor}`;
 	}
-	const sshFingerprint = parsedMeta.ssh_fingerprint || parsedMeta.ssh_key_fingerprint;
+	const sshFingerprint =
+		parsedMeta.ssh_fingerprint || parsedMeta.ssh_key_fingerprint;
 	if (sshFingerprint) {
 		return `SSH: ${sshFingerprint}`;
 	}
@@ -79,7 +80,6 @@ server.get("/health", async () => {
 server.get("/", async (request, reply) => {
 	return reply.redirect("/admin");
 });
-
 
 /**
  * Register a new repository. Returns a registration token.
@@ -393,6 +393,107 @@ server.post("/api/v1/acme/verify", async (request, reply) => {
 	}
 });
 
+interface SemVerWarning {
+	package: string;
+	type: string;
+	reason: string;
+	severity: "warning" | "critical";
+}
+
+function parsePackages(dataObj: any): Record<string, string> {
+	const pkgs: Record<string, string> = {};
+	if (!dataObj || !dataObj.packages || typeof dataObj.packages !== "object") {
+		return pkgs;
+	}
+	for (const [name, val] of Object.entries(dataObj.packages)) {
+		if (typeof val === "string") {
+			pkgs[name] = val;
+		} else if (val && typeof val === "object" && (val as any).version) {
+			pkgs[name] = (val as any).version;
+		}
+	}
+	return pkgs;
+}
+
+function auditSemVerHealth(
+	oldPkgs: Record<string, string>,
+	newPkgs: Record<string, string>,
+): SemVerWarning[] {
+	const warnings: SemVerWarning[] = [];
+
+	for (const [name, newVer] of Object.entries(newPkgs)) {
+		// 1. Check Open Fuse Constraint
+		if (
+			newVer.includes(">=") ||
+			newVer.includes(">") ||
+			newVer.includes("*") ||
+			newVer.toLowerCase().includes("x")
+		) {
+			warnings.push({
+				package: name,
+				type: "open_fuse_rule",
+				reason: `Open-ended constraint detected in package '${name}': '${newVer}'`,
+				severity: "critical",
+			});
+			continue;
+		}
+
+		const oldVer = oldPkgs[name];
+		if (oldVer) {
+			const parseVersion = (v: string) => {
+				const parts = v
+					.replace(/[^0-9.]/g, "")
+					.split(".")
+					.map(Number);
+				return {
+					major: parts[0] ?? 0,
+					minor: parts[1] ?? 0,
+					patch: parts[2] ?? 0,
+				};
+			};
+
+			const oldSem = parseVersion(oldVer);
+			const newSem = parseVersion(newVer);
+
+			// 2. Downgrade/Regression Warning
+			if (
+				newSem.major < oldSem.major ||
+				(newSem.major === oldSem.major && newSem.minor < oldSem.minor) ||
+				(newSem.major === oldSem.major &&
+					newSem.minor === oldSem.minor &&
+					newSem.patch < oldSem.patch)
+			) {
+				warnings.push({
+					package: name,
+					type: "dependency_regression",
+					reason: `Version regression detected for package '${name}' from '${oldVer}' to '${newVer}'`,
+					severity: "critical",
+				});
+			}
+			// 3. Technical Debt Wall (Major Version Jump)
+			else if (newSem.major > oldSem.major) {
+				warnings.push({
+					package: name,
+					type: "technical_debt_wall",
+					reason: `Major version upgrade detected for package '${name}' from '${oldVer}' to '${newVer}' (Technical Debt Wall)`,
+					severity: "warning",
+				});
+			}
+			// 4. High Velocity Drift Check (Minor version jump > 2 versions)
+			else if (newSem.minor > oldSem.minor + 2) {
+				warnings.push({
+					package: name,
+					type: "high_drift_velocity",
+					reason: `High drift velocity detected for package '${name}' upgrading from '${oldVer}' to '${newVer}'`,
+					severity: "warning",
+				});
+			}
+		}
+	}
+
+	return warnings;
+}
+
 /**
  * Helper to dispatch webhook payloads asynchronously with optional HMAC-SHA256 signature verification.
  */
@@ -655,6 +756,19 @@ server.post("/api/v1/log/push", async (request, reply) => {
 			`Successfully stored log for "${resolvedRepo.owner}/${resolvedRepo.repo}". Total blocks: ${report.blockCount}`,
 		);
 
+		// Extract client execution metadata headers
+		const clientVersion = request.headers["x-client-version"] as
+			| string
+			| undefined;
+		const osPlatform = request.headers["x-client-os"] as string | undefined;
+		const runtimeEnv = request.headers["x-client-env"] as string | undefined;
+		const isCiHeader = request.headers["x-client-ci"] as string | undefined;
+		const gitActorHeader = request.headers["x-client-actor"] as
+			| string
+			| undefined;
+		const clientIp =
+			request.ip || request.headers["x-forwarded-for"] || "127.0.0.1";
+
 		// Dispatch push success alerts to webhooks
 		dispatchWebhooks(
 			resolvedRepo.id,
@@ -667,20 +781,118 @@ server.post("/api/v1/log/push", async (request, reply) => {
 			},
 		);
 
-		// Record client execution metadata for integrations auditing
-		const clientVersion = request.headers["x-client-version"] as string | undefined;
-		const osPlatform = request.headers["x-client-os"] as string | undefined;
-		const runtimeEnv = request.headers["x-client-env"] as string | undefined;
-		const isCiHeader = request.headers["x-client-ci"] as string | undefined;
-		const gitActorHeader = request.headers["x-client-actor"] as string | undefined;
-		const clientIp = request.ip || request.headers["x-forwarded-for"] || "127.0.0.1";
+		// Issue #9: SemVer Webhooks Pipeline triggers
+		dispatchWebhooks(
+			resolvedRepo.id,
+			resolvedRepo.owner,
+			resolvedRepo.repo,
+			"chain.pushed",
+			{
+				blockIndex: report.blockIndex,
+				version: report.version,
+				metaHash: report.lastBlockHash,
+				timestamp: new Date().toISOString(),
+				actor: gitActorHeader || "unknown",
+			},
+		);
+
+		const docs = splitRawDocuments(chainContent);
+		const blockCount = docs.length / 2;
+		let newPkgData: any = {};
+		let oldPkgData: any = {};
+
+		if (blockCount >= 1) {
+			try {
+				const lastDataStr = docs[2 * (blockCount - 1)];
+				if (lastDataStr) {
+					newPkgData = YAML.parse(lastDataStr);
+				}
+			} catch (e) {}
+
+			if (blockCount >= 2) {
+				try {
+					const prevDataStr = docs[2 * (blockCount - 2)];
+					if (prevDataStr) {
+						oldPkgData = YAML.parse(prevDataStr);
+					}
+				} catch (e) {}
+			} else {
+				try {
+					const archived = getArchivedLogs(resolvedRepo.id);
+					if (archived.length > 0) {
+						const lastArchived = archived[archived.length - 1];
+						if (lastArchived) {
+							const archDocs = splitRawDocuments(lastArchived.chain_content);
+							const archBlockCount = archDocs.length / 2;
+							if (archBlockCount >= 1) {
+								const lastArchDataStr = archDocs[2 * (archBlockCount - 1)];
+								if (lastArchDataStr) {
+									oldPkgData = YAML.parse(lastArchDataStr);
+								}
+							}
+						}
+					}
+				} catch (e) {}
+			}
+		}
+
+		const oldPkgs = parsePackages(oldPkgData);
+		const newPkgs = parsePackages(newPkgData);
+
+		// Compute added and updated diffs
+		for (const [name, newVer] of Object.entries(newPkgs)) {
+			const oldVer = oldPkgs[name];
+			if (oldVer === undefined) {
+				dispatchWebhooks(
+					resolvedRepo.id,
+					resolvedRepo.owner,
+					resolvedRepo.repo,
+					"package.added",
+					{
+						package: name,
+						version: newVer,
+					},
+				);
+			} else if (oldVer !== newVer) {
+				dispatchWebhooks(
+					resolvedRepo.id,
+					resolvedRepo.owner,
+					resolvedRepo.repo,
+					"package.updated",
+					{
+						package: name,
+						oldVersion: oldVer,
+						newVersion: newVer,
+					},
+				);
+			}
+		}
+
+		// SemVer health warnings
+		const healthWarnings = auditSemVerHealth(oldPkgs, newPkgs);
+		for (const warning of healthWarnings) {
+			dispatchWebhooks(
+				resolvedRepo.id,
+				resolvedRepo.owner,
+				resolvedRepo.repo,
+				"health.warning",
+				{
+					package: warning.package,
+					warningType: warning.type,
+					reason: warning.reason,
+					severity: warning.severity,
+				},
+			);
+		}
 
 		logIntegrationEvent(resolvedRepo.id, {
 			client_version: clientVersion || null,
 			os_platform: osPlatform || null,
 			runtime_env: runtimeEnv || null,
 			is_ci: isCiHeader === "true" ? 1 : 0,
-			client_ip: (Array.isArray(clientIp) ? clientIp[0] : (clientIp as string)) || "127.0.0.1",
+			client_ip:
+				(Array.isArray(clientIp) ? clientIp[0] : (clientIp as string)) ||
+				"127.0.0.1",
 			git_actor: gitActorHeader || null,
 		});
 
@@ -1346,7 +1558,10 @@ server.get("/api/v1/repo/:id/sigs", async (request, reply) => {
 						signature: parsedMeta.signature || null,
 						committer: parsedMeta.committer || null,
 						oidcClaims: parsedMeta.oidc_claims || null,
-						sshFingerprint: parsedMeta.ssh_fingerprint || parsedMeta.ssh_key_fingerprint || null,
+						sshFingerprint:
+							parsedMeta.ssh_fingerprint ||
+							parsedMeta.ssh_key_fingerprint ||
+							null,
 						gpgSignature: parsedMeta.gpg_signature || null,
 						gitActor: parsedMeta.git_actor || parsedMeta.committer || null,
 					});
@@ -1466,7 +1681,9 @@ server.get("/api/v1/repo/:id/tree", async (request, reply) => {
 		const firstBlock = blocks[0];
 		if (firstBlock) {
 			try {
-				const parsedMeta = YAML.parse(firstBlock.metaDocStr)?.["$yaml-chain-meta"];
+				const parsedMeta = YAML.parse(firstBlock.metaDocStr)?.[
+					"$yaml-chain-meta"
+				];
 				if (parsedMeta?.prev_meta_hash) {
 					firstPrevHash = parsedMeta.prev_meta_hash;
 				}
@@ -1585,7 +1802,10 @@ server.post("/api/v1/alerts", async (request, reply) => {
 		});
 	}
 
-	const repoId = typeof body.repo_id === "string" ? Number.parseInt(body.repo_id, 10) : body.repo_id;
+	const repoId =
+		typeof body.repo_id === "string"
+			? Number.parseInt(body.repo_id, 10)
+			: body.repo_id;
 	if (typeof repoId !== "number" || Number.isNaN(repoId)) {
 		return reply.status(400).send({
 			error: "Bad Request",
@@ -1954,152 +2174,187 @@ server.post("/api/v1/admin/login", async (request, reply) => {
 });
 
 // 3. GET /api/v1/admin/projects: List all projects mapped in registry
-server.get("/api/v1/admin/projects", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	try {
-		const projects = getProjects();
-		return { success: true, projects };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+server.get(
+	"/api/v1/admin/projects",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		try {
+			const projects = getProjects();
+			return { success: true, projects };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 4. POST /api/v1/admin/projects: Create a new project container
-server.post("/api/v1/admin/projects", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const body = request.body as any;
-	const name = body?.name;
+server.post(
+	"/api/v1/admin/projects",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const body = request.body as any;
+		const name = body?.name;
 
-	if (!name || typeof name !== "string") {
-		return reply.status(400).send({
-			error: "Bad Request",
-			message: "Project name is required.",
-		});
-	}
+		if (!name || typeof name !== "string") {
+			return reply.status(400).send({
+				error: "Bad Request",
+				message: "Project name is required.",
+			});
+		}
 
-	try {
-		const project = createProject(name);
-		return { success: true, project };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+		try {
+			const project = createProject(name);
+			return { success: true, project };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 5. POST /api/v1/admin/projects/link: Groups a repo under a project
-server.post("/api/v1/admin/projects/link", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const body = request.body as any;
-	const repoId = body?.repoId;
-	const projectId = body?.projectId;
+server.post(
+	"/api/v1/admin/projects/link",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const body = request.body as any;
+		const repoId = body?.repoId;
+		const projectId = body?.projectId;
 
-	if (repoId === undefined) {
-		return reply.status(400).send({
-			error: "Bad Request",
-			message: "repoId parameter is required.",
-		});
-	}
+		if (repoId === undefined) {
+			return reply.status(400).send({
+				error: "Bad Request",
+				message: "repoId parameter is required.",
+			});
+		}
 
-	try {
-		linkRepoToProject(repoId, projectId || null);
-		return { success: true };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+		try {
+			linkRepoToProject(repoId, projectId || null);
+			return { success: true };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 6. GET /api/v1/admin/repos: Lists all registered repositories
-server.get("/api/v1/admin/repos", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	try {
-		const repos = getAllRepos();
-		return { success: true, repos };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+server.get(
+	"/api/v1/admin/repos",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		try {
+			const repos = getAllRepos();
+			return { success: true, repos };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 7. GET /api/v1/admin/projects/:id/checks: Detailed state and timeline logs of repos mapped to project
-server.get("/api/v1/admin/projects/:id/checks", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const { id } = request.params as any;
-	try {
-		const repos = getProjectRepos(id);
-		const enrichedRepos = repos.map(r => {
-			const log = getLog(r.id);
-			return {
-				...r,
-				log: log || null
-			};
-		});
-		return { success: true, repos: enrichedRepos };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+server.get(
+	"/api/v1/admin/projects/:id/checks",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const { id } = request.params as any;
+		try {
+			const repos = getProjectRepos(id);
+			const enrichedRepos = repos.map((r) => {
+				const log = getLog(r.id);
+				return {
+					...r,
+					log: log || null,
+				};
+			});
+			return { success: true, repos: enrichedRepos };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 8. GET /api/v1/admin/projects/:id/integrations: Client pushes and runner metadata auditing events
-server.get("/api/v1/admin/projects/:id/integrations", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const { id } = request.params as any;
-	try {
-		const repos = getProjectRepos(id);
-		let allEvents: any[] = [];
-		for (const r of repos) {
-			const events = getIntegrationEvents(r.id);
-			const mappedEvents = events.map(e => ({
-				...e,
-				owner: r.owner,
-				repo: r.repo
-			}));
-			allEvents = [...allEvents, ...mappedEvents];
+server.get(
+	"/api/v1/admin/projects/:id/integrations",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const { id } = request.params as any;
+		try {
+			const repos = getProjectRepos(id);
+			let allEvents: any[] = [];
+			for (const r of repos) {
+				const events = getIntegrationEvents(r.id);
+				const mappedEvents = events.map((e) => ({
+					...e,
+					owner: r.owner,
+					repo: r.repo,
+				}));
+				allEvents = [...allEvents, ...mappedEvents];
+			}
+			// Sort events chronologically descending
+			allEvents.sort(
+				(a, b) =>
+					new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+			);
+			return { success: true, events: allEvents };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
 		}
-		// Sort events chronologically descending
-		allEvents.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-		return { success: true, events: allEvents };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+	},
+);
 
 // 9. POST /api/v1/admin/repo/:id/toggle-premium: Toggles premium access and promotions
-server.post("/api/v1/admin/repo/:id/toggle-premium", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const { id } = request.params as any;
-	try {
-		togglePremium(parseInt(id, 10));
-		return { success: true };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+server.post(
+	"/api/v1/admin/repo/:id/toggle-premium",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const { id } = request.params as any;
+		try {
+			togglePremium(parseInt(id, 10));
+			return { success: true };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 // 10. POST /api/v1/admin/repo/:id/revoke: Revokes access token
-server.post("/api/v1/admin/repo/:id/revoke", { preHandler: verifyAdminAuth }, async (request, reply) => {
-	const { id } = request.params as any;
-	try {
-		revokeRepositoryToken(parseInt(id, 10));
-		return { success: true };
-	} catch (err: any) {
-		return reply.status(500).send({
-			error: "Internal Server Error",
-			message: err.message,
-		});
-	}
-});
+server.post(
+	"/api/v1/admin/repo/:id/revoke",
+	{ preHandler: verifyAdminAuth },
+	async (request, reply) => {
+		const { id } = request.params as any;
+		try {
+			revokeRepositoryToken(parseInt(id, 10));
+			return { success: true };
+		} catch (err: any) {
+			return reply.status(500).send({
+				error: "Internal Server Error",
+				message: err.message,
+			});
+		}
+	},
+);
 
 /**
  * Starts the server on the specified port.

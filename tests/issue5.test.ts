@@ -1,10 +1,4 @@
-import {
-	describe,
-	it,
-	expect,
-	beforeAll,
-	afterAll,
-} from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { server } from "../src/server.ts";
 import { initDb, getRepositoryByPath } from "../src/database.ts";
 import {
@@ -177,7 +171,9 @@ describe("Issue #5 - Visualization Tree API Endpoint (/api/v1/repo/:id/tree)", (
 
 		const payload = JSON.parse(treeRes.body);
 		expect(payload.success).toBe(true);
-		expect(payload.repository).toBe(`${owner.toLowerCase()}/${repoName.toLowerCase()}`);
+		expect(payload.repository).toBe(
+			`${owner.toLowerCase()}/${repoName.toLowerCase()}`,
+		);
 		expect(payload.blockCount).toBe(1);
 
 		// Verify Tree structure
@@ -265,7 +261,9 @@ describe("Issue #5 - Visualization Tree API Endpoint (/api/v1/repo/:id/tree)", (
 		});
 		expect(treeRes.statusCode).toBe(200);
 		const payload = JSON.parse(treeRes.body);
-		expect(payload.tree.children[0].identityBadge).toBe("OIDC: aaron-github-runner");
+		expect(payload.tree.children[0].identityBadge).toBe(
+			"OIDC: aaron-github-runner",
+		);
 	});
 
 	it("should assemble active logs and archived logs across key rollover/rotations linearly", async () => {
@@ -288,7 +286,9 @@ describe("Issue #5 - Visualization Tree API Endpoint (/api/v1/repo/:id/tree)", (
 		const id = repoRecord!.id;
 
 		// 1. Push Block 0 (Epoch 0)
-		const block0 = createValidChainPair(0, GENESIS_PREV_HASH, { step: "genesis" });
+		const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
+			step: "genesis",
+		});
 		let pushRes = await server.inject({
 			method: "POST",
 			url: "/api/v1/log/push",
@@ -315,11 +315,10 @@ describe("Issue #5 - Visualization Tree API Endpoint (/api/v1/repo/:id/tree)", (
 		expect(pushRes.statusCode).toBe(200);
 
 		// 3. Initiate Key Rollover (creates Epoch 1 starting with rollover block 0 linking to block 1)
-		const rolloverBlock = createValidChainPair(
-			0,
-			block1.metaHash,
-			{ genesis_rollover: true, new_epoch: 1 },
-		);
+		const rolloverBlock = createValidChainPair(0, block1.metaHash, {
+			genesis_rollover: true,
+			new_epoch: 1,
+		});
 		const rolloverRes = await server.inject({
 			method: "POST",
 			url: `/api/v1/repo/${rollOwner}/${rollRepoName}/rollover`,
@@ -367,8 +366,17 @@ describe("Issue #5 - Visualization Tree API Endpoint (/api/v1/repo/:id/tree)", (
 		expect(graph.nodes).toHaveLength(4); // Anchor + Block 0 + Block 1 + Rollover Block 0
 		expect(graph.edges).toHaveLength(3); // 3 edges linking them linearly
 
-		expect(graph.edges[0]).toEqual({ source: GENESIS_PREV_HASH, target: block0.metaHash });
-		expect(graph.edges[1]).toEqual({ source: block0.metaHash, target: block1.metaHash });
-		expect(graph.edges[2]).toEqual({ source: block1.metaHash, target: rolloverBlock.metaHash });
+		expect(graph.edges[0]).toEqual({
+			source: GENESIS_PREV_HASH,
+			target: block0.metaHash,
+		});
+		expect(graph.edges[1]).toEqual({
+			source: block0.metaHash,
+			target: block1.metaHash,
+		});
+		expect(graph.edges[2]).toEqual({
+			source: block1.metaHash,
+			target: rolloverBlock.metaHash,
+		});
 	});
 });

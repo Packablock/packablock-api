@@ -24,6 +24,7 @@ export interface VerificationReport {
 	actual?: any;
 	lastBlockHash?: string;
 	blockCount?: number;
+	version?: string;
 }
 
 /**
@@ -248,9 +249,20 @@ export function verifyInMemoryChain(chainContent: string): VerificationReport {
 		lastBlockHash = blockReport.lastBlockHash!;
 	}
 
+	const lastMetaDocStr = docs[2 * (blockCount - 1) + 1];
+	let version: string | undefined;
+	let blockIndex: number | undefined;
+	try {
+		const lastMeta = YAML.parse(lastMetaDocStr!)?.["$yaml-chain-meta"];
+		version = lastMeta?.version;
+		blockIndex = lastMeta?.block_index;
+	} catch (e) {}
+
 	return {
 		valid: true,
 		lastBlockHash,
 		blockCount,
+		blockIndex,
+		version,
 	};
 }

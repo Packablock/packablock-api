@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { server } from "../src/server.ts";
 import { initDb } from "../src/database.ts";
-import { sha256, deterministicMetaHash, GENESIS_PREV_HASH } from "../src/verify.ts";
+import {
+	sha256,
+	deterministicMetaHash,
+	GENESIS_PREV_HASH,
+} from "../src/verify.ts";
 import YAML from "yaml";
 import fs from "node:fs";
 import path from "node:path";
@@ -192,7 +196,9 @@ describe("Registry Admin Dashboard & Projects API Endpoints", () => {
 
 	it("should record and list push integration events containing metadata headers", async () => {
 		// Mock a push with metadata headers using our cryptographic helper
-		const block = createValidChainPair(0, GENESIS_PREV_HASH, { message: "Initial block" });
+		const block = createValidChainPair(0, GENESIS_PREV_HASH, {
+			message: "Initial block",
+		});
 		const mockChain = block.chainFragment + "\n";
 
 		const pushRes = await server.inject({
@@ -263,6 +269,8 @@ describe("Registry Admin Dashboard & Projects API Endpoints", () => {
 			headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
 		});
 		const checkData = JSON.parse(checkRes.body);
-		expect(checkData.repos[0].registration_token.startsWith("pb_revoked_")).toBe(true);
+		expect(
+			checkData.repos[0].registration_token.startsWith("pb_revoked_"),
+		).toBe(true);
 	});
 });

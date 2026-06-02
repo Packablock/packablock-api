@@ -91,9 +91,13 @@ export function initDb(): void {
 		try {
 			if (!watcher) {
 				watcher = watch(dbDir, (eventType, filename) => {
-					console.log(`[DEV MODE] File change detected in data directory: ${filename} (Event: ${eventType})`);
+					console.log(
+						`[DEV MODE] File change detected in data directory: ${filename} (Event: ${eventType})`,
+					);
 					if (filename === path.basename(DB_FILE)) {
-						console.log(`[DEV MODE] Re-initializing database connection to: ${DB_FILE}`);
+						console.log(
+							`[DEV MODE] Re-initializing database connection to: ${DB_FILE}`,
+						);
 						try {
 							db.close();
 						} catch (e) {}
@@ -101,7 +105,9 @@ export function initDb(): void {
 						db.run("PRAGMA foreign_keys = ON;");
 					}
 				});
-				console.log(`[DEV MODE] Watching for file changes in data directory: ${dbDir}`);
+				console.log(
+					`[DEV MODE] Watching for file changes in data directory: ${dbDir}`,
+				);
 			}
 		} catch (err) {
 			console.error(`[DEV MODE] Failed to watch data directory: ${err}`);
@@ -197,7 +203,9 @@ export function initDb(): void {
 
 	// Link repositories to projects via project_id column migration
 	try {
-		db.run("ALTER TABLE repositories ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;");
+		db.run(
+			"ALTER TABLE repositories ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;",
+		);
 	} catch (e) {}
 
 	// Create Integration Events table
@@ -501,21 +509,25 @@ export function saveCachedPackage(packageName: string, version: string): void {
 export function createProject(name: string): ProjectRecord {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
-	db.run(
-		"INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
-		[id, name, now]
-	);
+	db.run("INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)", [
+		id,
+		name,
+		now,
+	]);
 	return { id, name, created_at: now };
 }
 
 /**
  * Groups/links a repository to a project.
  */
-export function linkRepoToProject(repoId: number, projectId: string | null): void {
-	db.run(
-		"UPDATE repositories SET project_id = ? WHERE id = ?",
-		[projectId, repoId]
-	);
+export function linkRepoToProject(
+	repoId: number,
+	projectId: string | null,
+): void {
+	db.run("UPDATE repositories SET project_id = ? WHERE id = ?", [
+		projectId,
+		repoId,
+	]);
 }
 
 /**
@@ -544,7 +556,9 @@ export function getProjectDetails(projectId: string): ProjectRecord | null {
  * Lists all repositories mapped to a specific project.
  */
 export function getProjectRepos(projectId: string): Array<RepositoryRecord> {
-	const query = db.prepare("SELECT * FROM repositories WHERE project_id = ? ORDER BY owner ASC, repo ASC");
+	const query = db.prepare(
+		"SELECT * FROM repositories WHERE project_id = ? ORDER BY owner ASC, repo ASC",
+	);
 	return query.all(projectId) as any;
 }
 
@@ -560,7 +574,7 @@ export function logIntegrationEvent(
 		is_ci: number;
 		client_ip: string | null;
 		git_actor: string | null;
-	}
+	},
 ): void {
 	const now = new Date().toISOString();
 	db.run(
@@ -576,16 +590,20 @@ export function logIntegrationEvent(
 			metadata.is_ci,
 			metadata.client_ip,
 			metadata.git_actor,
-			now
-		]
+			now,
+		],
 	);
 }
 
 /**
  * Fetches recent integration events for a repository.
  */
-export function getIntegrationEvents(repoId: number): Array<IntegrationEventRecord> {
-	const query = db.prepare("SELECT * FROM integration_events WHERE repo_id = ? ORDER BY created_at DESC LIMIT 50");
+export function getIntegrationEvents(
+	repoId: number,
+): Array<IntegrationEventRecord> {
+	const query = db.prepare(
+		"SELECT * FROM integration_events WHERE repo_id = ? ORDER BY created_at DESC LIMIT 50",
+	);
 	return query.all(repoId) as any;
 }
 
@@ -593,7 +611,9 @@ export function getIntegrationEvents(repoId: number): Array<IntegrationEventReco
  * Lists all repositories in the registry database.
  */
 export function getAllRepos(): Array<RepositoryRecord> {
-	const query = db.prepare("SELECT * FROM repositories ORDER BY owner ASC, repo ASC");
+	const query = db.prepare(
+		"SELECT * FROM repositories ORDER BY owner ASC, repo ASC",
+	);
 	return query.all() as any;
 }
 
@@ -608,7 +628,7 @@ export function togglePremium(repoId: number): void {
 		const newStatus = newPremium === 1 ? "verified" : "none";
 		db.run(
 			"UPDATE repositories SET is_premium = ?, verification_status = ? WHERE id = ?",
-			[newPremium, newStatus, repoId]
+			[newPremium, newStatus, repoId],
 		);
 	}
 }
@@ -618,8 +638,8 @@ export function togglePremium(repoId: number): void {
  */
 export function revokeRepositoryToken(repoId: number): void {
 	const revokedToken = "pb_revoked_" + crypto.randomUUID();
-	db.run(
-		"UPDATE repositories SET registration_token = ? WHERE id = ?",
-		[revokedToken, repoId]
-	);
+	db.run("UPDATE repositories SET registration_token = ? WHERE id = ?", [
+		revokedToken,
+		repoId,
+	]);
 }
