@@ -17,9 +17,20 @@ import {
 	getArchivedLogs,
 	getCachedPackage,
 	saveCachedPackage,
+	logIntegrationEvent,
+	getIntegrationEvents,
+	createProject,
+	linkRepoToProject,
+	getProjects,
+	getProjectDetails,
+	getProjectRepos,
+	getAllRepos,
+	togglePremium,
+	revokeRepositoryToken,
 } from "./database.js";
 import { verifyInMemoryChain, splitRawDocuments } from "./verify.js";
 import { verifyGithubOidcToken } from "./oidc.js";
+import { adminHtml } from "./adminHtml.js";
 
 export const server = fastify({ logger: true });
 
@@ -624,6 +635,23 @@ server.post("/api/v1/log/push", async (request, reply) => {
 				lastBlockHash: saved.last_block_hash,
 			},
 		);
+
+		// Record client execution metadata for integrations auditing
+		const clientVersion = request.headers["x-client-version"] as string | undefined;
+		const osPlatform = request.headers["x-client-os"] as string | undefined;
+		const runtimeEnv = request.headers["x-client-env"] as string | undefined;
+		const isCiHeader = request.headers["x-client-ci"] as string | undefined;
+		const gitActorHeader = request.headers["x-client-actor"] as string | undefined;
+		const clientIp = request.ip || request.headers["x-forwarded-for"] || "127.0.0.1";
+
+		logIntegrationEvent(resolvedRepo.id, {
+			client_version: clientVersion || null,
+			os_platform: osPlatform || null,
+			runtime_env: runtimeEnv || null,
+			is_ci: isCiHeader === "true" ? 1 : 0,
+			client_ip: Array.isArray(clientIp) ? clientIp[0] : (clientIp as string),
+			git_actor: gitActorHeader || null,
+		});
 
 		return {
 			success: true,
@@ -1443,6 +1471,207 @@ server.delete(
 		}
 	},
 );
+
+/**
+ * ==========================================================================
+ * ADMINISTRATIVE DASHBOARD WEB UI & PROJECTS API ROUTES (Milestone api #10)
+ * ==========================================================================
+ */
+
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "admin_secret_token_1234";
+
+async function verifyAdminAuth(request: any, reply: any) {
+	const authHeader = request.headers["authorization"];
+	let token = "";
+	if (authHeader && authHeader.startsWith("Bearer ")) {
+		token = authHeader.substring(7);
+	} else {
+		const cookieHeader = request.headers["cookie"];
+		if (cookieHeader) {
+			const cookies = cookieHeader.split(";").reduce((acc: any, c: string) => {
+				const [k, v] = c.trim().split("=");
+				if (k && v) acc[k] = decodeURIComponent(v);
+				return acc;
+			}, {});
+			token = cookies["pb_admin_session"] || "";
+		}
+	}
+
+	if (token !== ADMIN_TOKEN) {
+		return reply.status(401).send({
+			error: "Unauthorized",
+			message: "Invalid or missing administrator session credentials.",
+		});
+	}
+}
+
+// 1. GET /admin: Serves the high-fidelity admin dashboard sitemap SPA
+server.get("/admin", async (request, reply) => {
+	reply.type("text/html").send(adminHtml);
+});
+
+// 2. POST /api/v1/admin/login: Sets the HTTP-only admin session cookie
+server.post("/api/v1/admin/login", async (request, reply) => {
+	const body = request.body as any;
+	const token = body?.token;
+
+	if (token === ADMIN_TOKEN) {
+		return { success: true };
+	} else {
+		return reply.status(401).send({
+			error: "Unauthorized",
+			message: "Incorrect administrator access token.",
+		});
+	}
+});
+
+// 3. GET /api/v1/admin/projects: List all projects mapped in registry
+server.get("/api/v1/admin/projects", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	try {
+		const projects = getProjects();
+		return { success: true, projects };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 4. POST /api/v1/admin/projects: Create a new project container
+server.post("/api/v1/admin/projects", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const body = request.body as any;
+	const name = body?.name;
+
+	if (!name || typeof name !== "string") {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "Project name is required.",
+		});
+	}
+
+	try {
+		const project = createProject(name);
+		return { success: true, project };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 5. POST /api/v1/admin/projects/link: Groups a repo under a project
+server.post("/api/v1/admin/projects/link", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const body = request.body as any;
+	const repoId = body?.repoId;
+	const projectId = body?.projectId;
+
+	if (repoId === undefined) {
+		return reply.status(400).send({
+			error: "Bad Request",
+			message: "repoId parameter is required.",
+		});
+	}
+
+	try {
+		linkRepoToProject(repoId, projectId || null);
+		return { success: true };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 6. GET /api/v1/admin/repos: Lists all registered repositories
+server.get("/api/v1/admin/repos", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	try {
+		const repos = getAllRepos();
+		return { success: true, repos };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 7. GET /api/v1/admin/projects/:id/checks: Detailed state and timeline logs of repos mapped to project
+server.get("/api/v1/admin/projects/:id/checks", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const { id } = request.params as any;
+	try {
+		const repos = getProjectRepos(id);
+		const enrichedRepos = repos.map(r => {
+			const log = getLog(r.id);
+			return {
+				...r,
+				log: log || null
+			};
+		});
+		return { success: true, repos: enrichedRepos };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 8. GET /api/v1/admin/projects/:id/integrations: Client pushes and runner metadata auditing events
+server.get("/api/v1/admin/projects/:id/integrations", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const { id } = request.params as any;
+	try {
+		const repos = getProjectRepos(id);
+		let allEvents: any[] = [];
+		for (const r of repos) {
+			const events = getIntegrationEvents(r.id);
+			const mappedEvents = events.map(e => ({
+				...e,
+				owner: r.owner,
+				repo: r.repo
+			}));
+			allEvents = [...allEvents, ...mappedEvents];
+		}
+		// Sort events chronologically descending
+		allEvents.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+		return { success: true, events: allEvents };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 9. POST /api/v1/admin/repo/:id/toggle-premium: Toggles premium access and promotions
+server.post("/api/v1/admin/repo/:id/toggle-premium", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const { id } = request.params as any;
+	try {
+		togglePremium(parseInt(id, 10));
+		return { success: true };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
+
+// 10. POST /api/v1/admin/repo/:id/revoke: Revokes access token
+server.post("/api/v1/admin/repo/:id/revoke", { preHandler: verifyAdminAuth }, async (request, reply) => {
+	const { id } = request.params as any;
+	try {
+		revokeRepositoryToken(parseInt(id, 10));
+		return { success: true };
+	} catch (err: any) {
+		return reply.status(500).send({
+			error: "Internal Server Error",
+			message: err.message,
+		});
+	}
+});
 
 /**
  * Starts the server on the specified port.

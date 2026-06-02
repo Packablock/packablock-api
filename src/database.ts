@@ -14,6 +14,25 @@ export interface RepositoryRecord {
 	verification_status: "none" | "pending" | "verified";
 	challenge_nonce: string | null;
 	pinned_public_key: string | null;
+	project_id: string | null;
+}
+
+export interface ProjectRecord {
+	id: string;
+	name: string;
+	created_at: string;
+}
+
+export interface IntegrationEventRecord {
+	id: number;
+	repo_id: number;
+	client_version: string | null;
+	os_platform: string | null;
+	runtime_env: string | null;
+	is_ci: number;
+	client_ip: string | null;
+	git_actor: string | null;
+	created_at: string;
 }
 
 export interface LogRecord {
@@ -139,6 +158,35 @@ export function initDb(): void {
       package_name TEXT PRIMARY KEY,
       version TEXT NOT NULL,
       cached_at TEXT NOT NULL
+    );
+  `);
+
+	// Create Projects table
+	db.run(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+	// Link repositories to projects via project_id column migration
+	try {
+		db.run("ALTER TABLE repositories ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;");
+	} catch (e) {}
+
+	// Create Integration Events table
+	db.run(`
+    CREATE TABLE IF NOT EXISTS integration_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+      client_version TEXT,
+      os_platform TEXT,
+      runtime_env TEXT,
+      is_ci INTEGER DEFAULT 0,
+      client_ip TEXT,
+      git_actor TEXT,
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -410,5 +458,134 @@ export function saveCachedPackage(packageName: string, version: string): void {
       cached_at = excluded.cached_at;
   `,
 		[packageName, version, now],
+	);
+}
+
+/**
+ * Creates a new project and returns its record.
+ */
+export function createProject(name: string): ProjectRecord {
+	const id = crypto.randomUUID();
+	const now = new Date().toISOString();
+	db.run(
+		"INSERT INTO projects (id, name, created_at) VALUES (?, ?, ?)",
+		[id, name, now]
+	);
+	return { id, name, created_at: now };
+}
+
+/**
+ * Groups/links a repository to a project.
+ */
+export function linkRepoToProject(repoId: number, projectId: string | null): void {
+	db.run(
+		"UPDATE repositories SET project_id = ? WHERE id = ?",
+		[projectId, repoId]
+	);
+}
+
+/**
+ * Lists all projects with their mapped repository counts.
+ */
+export function getProjects(): Array<ProjectRecord & { repoCount: number }> {
+	const query = db.prepare(`
+		SELECT p.*, COUNT(r.id) as repoCount
+		FROM projects p
+		LEFT JOIN repositories r ON r.project_id = p.id
+		GROUP BY p.id
+		ORDER BY p.name ASC
+	`);
+	return query.all() as any;
+}
+
+/**
+ * Retrieves specific project details.
+ */
+export function getProjectDetails(projectId: string): ProjectRecord | null {
+	const query = db.prepare("SELECT * FROM projects WHERE id = ?");
+	return query.get(projectId) as ProjectRecord | null;
+}
+
+/**
+ * Lists all repositories mapped to a specific project.
+ */
+export function getProjectRepos(projectId: string): Array<RepositoryRecord> {
+	const query = db.prepare("SELECT * FROM repositories WHERE project_id = ? ORDER BY owner ASC, repo ASC");
+	return query.all(projectId) as any;
+}
+
+/**
+ * Records client execution metadata on log pushes.
+ */
+export function logIntegrationEvent(
+	repoId: number,
+	metadata: {
+		client_version: string | null;
+		os_platform: string | null;
+		runtime_env: string | null;
+		is_ci: number;
+		client_ip: string | null;
+		git_actor: string | null;
+	}
+): void {
+	const now = new Date().toISOString();
+	db.run(
+		`
+		INSERT INTO integration_events (repo_id, client_version, os_platform, runtime_env, is_ci, client_ip, git_actor, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+		[
+			repoId,
+			metadata.client_version,
+			metadata.os_platform,
+			metadata.runtime_env,
+			metadata.is_ci,
+			metadata.client_ip,
+			metadata.git_actor,
+			now
+		]
+	);
+}
+
+/**
+ * Fetches recent integration events for a repository.
+ */
+export function getIntegrationEvents(repoId: number): Array<IntegrationEventRecord> {
+	const query = db.prepare("SELECT * FROM integration_events WHERE repo_id = ? ORDER BY created_at DESC LIMIT 50");
+	return query.all(repoId) as any;
+}
+
+/**
+ * Lists all repositories in the registry database.
+ */
+export function getAllRepos(): Array<RepositoryRecord> {
+	const query = db.prepare("SELECT * FROM repositories ORDER BY owner ASC, repo ASC");
+	return query.all() as any;
+}
+
+/**
+ * Admin action to toggle repository premium tier.
+ */
+export function togglePremium(repoId: number): void {
+	const query = db.prepare("SELECT is_premium FROM repositories WHERE id = ?");
+	const record = query.get(repoId) as { is_premium: number } | null;
+	if (record) {
+		const newPremium = record.is_premium === 1 ? 0 : 1;
+		const newStatus = newPremium === 1 ? "verified" : "none";
+		db.run(
+			"UPDATE repositories SET is_premium = ?, verification_status = ? WHERE id = ?",
+			[newPremium, newStatus, repoId]
+		);
+	}
+}
+
+/**
+ * Admin action to revoke repository registration token.
+ */
+export function revokeRepositoryToken(repoId: number): void {
+	const revokedToken = "pb_revoked_" + crypto.randomUUID();
+	db.run(
+		"UPDATE repositories SET registration_token = ? WHERE id = ?",
+		[revokedToken, repoId]
 	);
 }
