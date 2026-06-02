@@ -526,7 +526,7 @@ export const adminHtml = `<!DOCTYPE html>
                     <span style="font-weight: 600;">Admin</span>
                     <span style="font-size: 0.65rem; opacity: 0.7;">▼</span>
                 </button>
-                <div class="dropdown-content glass-panel" style="margin-top: 0.75rem;">
+                <div class="dropdown-content" style="margin-top: 0.75rem; background-color: var(--bg-surface); border: 1px solid var(--border-muted); border-radius: 12px;">
                     <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--accent-green); margin-bottom: 0.75rem; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.375rem;">
                         <span class="pulse-green" style="width: 6px; height: 6px; border-radius: 50%; background-color: var(--accent-green); display: inline-block;"></span>
                         Active Session Status
