@@ -12,6 +12,10 @@ services:
       - PORT=3030
       - DATABASE_FILE=/data/packablock.sqlite
       - ADMIN_TOKEN=admin_secret_token_1234
+      - MOCK_GITHUB_API=true
+    command: bun --watch run index.ts
     volumes:
       - ./data:/data
+      - ./src:/app/src
+      - ./index.ts:/app/index.ts
     restart: unless-stopped

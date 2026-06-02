@@ -895,7 +895,7 @@ export const adminHtml = `<!DOCTYPE html>
                 card.innerHTML = \`
                     <div class="card-header-row">
                         <div>
-                            <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem;">\${escapeHtml(p.name)}</h3>
+                            <h3 onclick="viewProject('\${p.id}', '\${escapeHtml(p.name)}')" style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; cursor: pointer; display: inline-block; transition: color 0.15s ease;" onmouseover="this.style.color='var(--accent-purple)'" onmouseout="this.style.color=''" class="project-title-link">\${escapeHtml(p.name)}</h3>
                             <p style="font-size: 0.8125rem; color: var(--text-muted);">ID: <span class="mono">\${p.id}</span> • Created: \${new Date(p.created_at).toLocaleDateString()}</p>
                         </div>
                         <div style="display: flex; gap: 0.5rem; align-items: center;">
