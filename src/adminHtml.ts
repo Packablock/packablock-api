@@ -1565,6 +1565,49 @@ export const adminHtml = `<!DOCTYPE html>
                 treeLayout(root);
 
                 const nodes = root.descendants();
+
+                // Space the nodes proportionally along the width of the timeline based on their timestamps
+                const blockNodes = nodes.filter(d => d.depth > 0 && d.data.timestamp);
+                const times = blockNodes
+                    .map(d => new Date(d.data.timestamp).getTime())
+                    .filter(t => !isNaN(t));
+
+                const avgSpacing = 260;
+                const startY = 200; // Starting horizontal offset for the first block after Genesis Anchor
+
+                if (times.length > 1) {
+                    const minTime = Math.min(...times);
+                    const maxTime = Math.max(...times);
+                    const timeRange = maxTime - minTime;
+
+                    if (timeRange > 0) {
+                        const totalTimelineWidth = (nodes.length - 1) * avgSpacing;
+                        nodes.forEach((d) => {
+                            if (d.depth === 0) {
+                                d.y = 0;
+                            } else {
+                                const t = new Date(d.data.timestamp).getTime();
+                                if (!isNaN(t)) {
+                                    const ratio = (t - minTime) / timeRange;
+                                    d.y = startY + ratio * totalTimelineWidth;
+                                } else {
+                                    d.y = d.depth * avgSpacing;
+                                }
+                            }
+                        });
+                    } else {
+                        // Fallback if all blocks have the exact same timestamp
+                        nodes.forEach((d) => {
+                            d.y = d.depth * avgSpacing;
+                        });
+                    }
+                } else {
+                    // Fallback if 0 or 1 blocks have timestamps
+                    nodes.forEach((d) => {
+                        d.y = d.depth * avgSpacing;
+                    });
+                }
+
                 // Alternate vertical positions (d.x) to create a gorgeous undulating trust chain
                 nodes.forEach((d) => {
                     if (d.depth > 0) {
