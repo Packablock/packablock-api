@@ -5,6 +5,7 @@ export const adminHtml = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Packablock supply chain registry</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
     <style>
         :root {
             --bg-base: #0b0f19;
@@ -79,6 +80,14 @@ export const adminHtml = `<!DOCTYPE html>
         @keyframes pulse-green-glow {
             0% { box-shadow: 0 0 5px rgba(16, 185, 129, 0.2); }
             100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.6); }
+        }
+
+        .pulse-green-circle {
+            animation: pulse-green-circle-glow 2s infinite alternate;
+        }
+        @keyframes pulse-green-circle-glow {
+            0% { stroke-width: 2px; stroke: rgba(16, 185, 129, 0.7); }
+            100% { stroke-width: 5px; stroke: rgba(16, 185, 129, 1); }
         }
 
         .pulse-red {
@@ -729,12 +738,28 @@ export const adminHtml = `<!DOCTYPE html>
 
             <!-- Bottom: Ledger timeline and archives -->
             <div class="glass-panel" style="padding: 2rem; display: flex; flex-direction: column; gap: 1.5rem;">
-                <div>
-                    <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem;">Cryptographic Ledger Audit Trail</h3>
-                    <p style="font-size: 0.875rem; color: var(--text-muted);">Drill into individual blocks of the anchoring validation chain.</p>
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h3 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem;">Cryptographic Ledger Audit Trail</h3>
+                        <p style="font-size: 0.875rem; color: var(--text-muted);">Drill into individual blocks of the anchoring validation chain.</p>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; background-color: var(--bg-base); padding: 0.25rem; border-radius: 8px; border: 1px solid var(--border-muted);">
+                        <button onclick="toggleLedgerView('timeline')" id="ledger-tab-timeline" class="btn btn-secondary btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8125rem;">Timeline</button>
+                        <button onclick="toggleLedgerView('tree')" id="ledger-tab-tree" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.8125rem;">Trust Tree</button>
+                    </div>
                 </div>
-                <div id="drilldown-timeline" class="timeline-container">
-                    <!-- Detailed nodes list injected here -->
+
+                <div id="drilldown-timeline-view" style="display: block;">
+                    <div id="drilldown-timeline" class="timeline-container">
+                        <!-- Detailed nodes list injected here -->
+                    </div>
+                </div>
+
+                <div id="drilldown-tree-view" style="display: none;">
+                    <div id="tree-canvas-container" class="glass-panel" style="background-color: var(--bg-surface); height: 500px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-muted); position: relative;">
+                        <svg id="tree-svg" style="width: 100%; height: 100%; cursor: grab;"></svg>
+                        <div id="tree-tooltip" class="glass-panel" style="position: absolute; display: none; background-color: var(--bg-card); border: 1px solid var(--border-muted); border-radius: 8px; padding: 1rem; pointer-events: none; z-index: 10; font-size: 0.8125rem; max-width: 320px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); color: var(--text-main);"></div>
+                    </div>
                 </div>
 
                 <div id="drilldown-archives-section" style="display: none; flex-direction: column; gap: 1rem; border-top: 1px solid var(--border-muted); padding-top: 1.5rem;">
@@ -1338,6 +1363,9 @@ export const adminHtml = `<!DOCTYPE html>
             document.getElementById('btn-toggle-tier').onclick = () => toggleRepoPremium(repo.id);
             document.getElementById('btn-revoke-token').onclick = () => revokeToken(repo.id);
 
+            // Reset ledger view to timeline when opening a repository drilldown
+            toggleLedgerView('timeline');
+
             // Draw full vertical audit ledger
             let timelineHtml = '<div class="mono" style="color: var(--text-muted); padding: 1.5rem; text-align: center;">Empty Ledger</div>';
             if (repo.log && repo.log.chain_content) {
@@ -1460,6 +1488,211 @@ export const adminHtml = `<!DOCTYPE html>
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
+        }
+
+        function toggleLedgerView(viewType) {
+            if (viewType === 'timeline') {
+                document.getElementById('drilldown-timeline-view').style.display = 'block';
+                document.getElementById('drilldown-tree-view').style.display = 'none';
+                document.getElementById('ledger-tab-timeline').className = 'btn btn-secondary btn-primary';
+                document.getElementById('ledger-tab-tree').className = 'btn btn-secondary';
+            } else {
+                document.getElementById('drilldown-timeline-view').style.display = 'none';
+                document.getElementById('drilldown-tree-view').style.display = 'block';
+                document.getElementById('ledger-tab-timeline').className = 'btn btn-secondary';
+                document.getElementById('ledger-tab-tree').className = 'btn btn-secondary btn-primary';
+                renderTrustTree();
+            }
+        }
+
+        async function renderTrustTree() {
+            const svg = d3.select("#tree-svg");
+            svg.selectAll("*").remove();
+
+            const container = document.getElementById("tree-canvas-container");
+            const width = container.clientWidth || 800;
+            const height = container.clientHeight || 500;
+
+            const tooltip = d3.select("#tree-tooltip");
+
+            if (!selectedRepo) return;
+
+            svg.append("text")
+                .attr("x", width / 2)
+                .attr("y", height / 2)
+                .attr("text-anchor", "middle")
+                .attr("fill", "var(--text-muted)")
+                .attr("font-size", "14px")
+                .attr("id", "tree-loading-text")
+                .text("Loading trust tree graph...");
+
+            try {
+                const res = await fetch(\`/api/v1/repo/\${selectedRepo.id}/tree\`, {
+                    headers: { 'Authorization': \`Bearer \${currentToken}\` }
+                });
+                
+                if (!res.ok) {
+                    throw new Error("Failed to fetch tree data");
+                }
+
+                const data = await res.json();
+                svg.select("#tree-loading-text").remove();
+
+                if (!data.success || !data.tree) {
+                    svg.append("text")
+                        .attr("x", width / 2)
+                        .attr("y", height / 2)
+                        .attr("text-anchor", "middle")
+                        .attr("fill", "var(--accent-red)")
+                        .text("No trust tree data available.");
+                    return;
+                }
+
+                const rootData = data.tree;
+
+                const g = svg.append("g").attr("class", "zoom-container");
+
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 3])
+                    .on("zoom", (event) => {
+                        g.attr("transform", event.transform);
+                    });
+
+                svg.call(zoom);
+
+                const treeLayout = d3.tree().nodeSize([60, 240]);
+                const root = d3.hierarchy(rootData);
+                treeLayout(root);
+
+                const nodes = root.descendants();
+                const links = root.links();
+
+                const initialX = 80;
+                const initialY = height / 2;
+                svg.call(zoom.transform, d3.zoomIdentity.translate(initialX, initialY).scale(1));
+
+                g.selectAll(".link")
+                    .data(links)
+                    .enter()
+                    .append("path")
+                    .attr("class", "link")
+                    .attr("fill", "none")
+                    .attr("stroke", "var(--border-muted)")
+                    .attr("stroke-width", 2)
+                    .attr("d", d3.linkHorizontal()
+                        .x(d => d.y)
+                        .y(d => d.x)
+                    );
+
+                const nodeGroup = g.selectAll(".node")
+                    .data(nodes)
+                    .enter()
+                    .append("g")
+                    .attr("class", d => \`node node-\${d.data.type}\`)
+                    .attr("transform", d => \`translate(\${d.data.y || 0}, \${d.data.x || 0})\`);
+
+                const nodeCircle = nodeGroup.append("circle")
+                    .attr("r", 14)
+                    .attr("fill", "var(--bg-base)")
+                    .attr("stroke-width", 3)
+                    .attr("stroke", d => {
+                        if (d.data.type === "root") return "var(--accent-green)";
+                        if (d.data.type === "rollover") return "var(--accent-purple)";
+                        return "var(--accent-cyan)";
+                    });
+
+                nodeGroup.each(function(d) {
+                    if (d.data.type === "root") {
+                        d3.select(this).select("circle")
+                            .attr("class", "pulse-green pulse-green-circle")
+                            .style("animation", "pulse-green-circle-glow 2s infinite alternate");
+                    }
+                });
+
+                nodeGroup.append("text")
+                    .attr("dy", ".35em")
+                    .attr("x", d => d.children ? -20 : 20)
+                    .attr("text-anchor", d => d.children ? "end" : "start")
+                    .attr("fill", "var(--text-main)")
+                    .attr("font-size", "12px")
+                    .attr("font-family", "sans-serif")
+                    .style("pointer-events", "none")
+                    .text(d => {
+                        if (d.data.type === "root") return d.data.name;
+                        const versionStr = d.data.version ? \` (\${d.data.version})\` : "";
+                        return \`Block #\${d.data.block_index}\${versionStr}\`;
+                    });
+
+                nodeCircle
+                    .style("cursor", "pointer")
+                    .on("mouseover", (event, d) => {
+                        d3.select(event.currentTarget)
+                            .transition()
+                            .duration(150)
+                            .attr("r", 18);
+
+                        const [x, y] = d3.pointer(event, container);
+                        
+                        let tooltipContent = "";
+                        if (d.data.type === "root") {
+                            tooltipContent = \`
+                                <div style="font-weight: 700; color: var(--accent-green); margin-bottom: 0.5rem;">Genesis Anchor</div>
+                                <div style="word-break: break-all; font-family: monospace; font-size: 0.75rem;">
+                                    <strong>Hash:</strong> \${d.data.id}
+                                </div>
+                            \`;
+                        } else {
+                            const badge = d.data.identityBadge || "N/A";
+                            const timestamp = d.data.timestamp ? new Date(d.data.timestamp).toLocaleString() : "N/A";
+                            const typeLabel = d.data.type === "rollover" 
+                                ? \`<span class="badge badge-purple" style="font-size: 0.7rem; padding: 0.1rem 0.3rem;">Rollover</span>\` 
+                                : \`<span class="badge badge-green" style="font-size: 0.7rem; padding: 0.1rem 0.3rem;">Block</span>\`;
+
+                            tooltipContent = \`
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                    <strong style="color: var(--text-main); font-size: 0.9rem;">Block #\${d.data.block_index}</strong>
+                                    \${typeLabel}
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.75rem; word-break: break-all;">
+                                    <div><strong>Version:</strong> <span class="mono">\${d.data.version || "N/A"}</span></div>
+                                    <div><strong>Timestamp:</strong> \${timestamp}</div>
+                                    <div><strong>Block Hash:</strong> <span class="mono" style="font-size: 0.7rem;">\${d.data.meta_hash || "N/A"}</span></div>
+                                    <div><strong>Data Hash:</strong> <span class="mono" style="font-size: 0.7rem;">\${d.data.data_hash || "N/A"}</span></div>
+                                    <div><strong>Actor Identity:</strong> <span class="badge badge-amber" style="text-transform: none; font-size: 0.7rem; font-weight: normal; padding: 0.1rem 0.3rem;">\${badge}</span></div>
+                                </div>
+                            \`;
+                        }
+
+                        tooltip.html(tooltipContent)
+                            .style("display", "block")
+                            .style("left", \`\${x + 15}px\`)
+                            .style("top", \`\${y + 15}px\`);
+                    })
+                    .on("mousemove", (event) => {
+                        const [x, y] = d3.pointer(event, container);
+                        tooltip
+                            .style("left", \`\${x + 15}px\`)
+                            .style("top", \`\${y + 15}px\`);
+                    })
+                    .on("mouseout", (event, d) => {
+                        d3.select(event.currentTarget)
+                            .transition()
+                            .duration(150)
+                            .attr("r", 14);
+
+                        tooltip.style("display", "none");
+                    });
+
+            } catch (err) {
+                console.error(err);
+                svg.select("#tree-loading-text").remove();
+                svg.append("text")
+                    .attr("x", width / 2)
+                    .attr("y", height / 2)
+                    .attr("text-anchor", "middle")
+                    .attr("fill", "var(--accent-red)")
+                    .text("Failed to load trust tree.");
+            }
         }
     </script>
 </body>
