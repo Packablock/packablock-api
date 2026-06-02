@@ -451,6 +451,59 @@ export const adminHtml = `<!DOCTYPE html>
             background-color: rgba(255, 255, 255, 0.02);
             border: 1px solid var(--border-muted);
         }
+
+        /* User Context Dropdown */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 0.5rem;
+            min-width: 280px;
+            padding: 1.25rem;
+            z-index: 100;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+
+        .dropdown.show .dropdown-content {
+            display: block;
+        }
+
+        .user-details-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            font-size: 0.8125rem;
+        }
+
+        .user-details-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-muted);
+            padding-bottom: 0.5rem;
+        }
+
+        .user-details-item:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .user-details-label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .user-details-value {
+            color: var(--text-main);
+            font-weight: 600;
+        }
     </style>
 </head>
 <body class="h-full">
@@ -460,11 +513,45 @@ export const adminHtml = `<!DOCTYPE html>
             <span class="logo-dot"></span>
             Packablock <span class="mono" style="color: var(--accent-green); font-size: 0.9rem;">[registry]</span>
         </a>
-        <div class="nav-links">
+        <div class="nav-links" style="display: flex; align-items: center; gap: 0.75rem;">
             <button id="nav-projects" onclick="showPage('projects')" class="nav-btn active">My Projects</button>
             <button onclick="toggleTheme()" class="nav-btn" style="display: inline-flex; align-items: center; gap: 0.25rem;">
                 <span id="theme-icon">☀️</span> <span id="theme-text">Light Mode</span>
             </button>
+
+            <!-- User Context Dropdown -->
+            <div id="user-dropdown" class="dropdown">
+                <button onclick="toggleUserDropdown(event)" class="nav-btn" style="display: inline-flex; align-items: center; gap: 0.375rem; border: 1px solid var(--border-muted); border-radius: 8px; padding: 0.375rem 0.75rem; background-color: rgba(255,255,255,0.02);">
+                    <span style="font-size: 0.95rem;">👤</span>
+                    <span style="font-weight: 600;">Admin</span>
+                    <span style="font-size: 0.65rem; opacity: 0.7;">▼</span>
+                </button>
+                <div class="dropdown-content glass-panel" style="margin-top: 0.75rem;">
+                    <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--accent-green); margin-bottom: 0.75rem; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.375rem;">
+                        <span class="pulse-green" style="width: 6px; height: 6px; border-radius: 50%; background-color: var(--accent-green); display: inline-block;"></span>
+                        Active Session Status
+                    </div>
+                    <ul class="user-details-list">
+                        <li class="user-details-item">
+                            <span class="user-details-label">Identity</span>
+                            <span class="user-details-value">System Admin</span>
+                        </li>
+                        <li class="user-details-item">
+                            <span class="user-details-label">Role Privilege</span>
+                            <span class="user-details-value" style="color: var(--accent-purple);">Root / Owner</span>
+                        </li>
+                        <li class="user-details-item">
+                            <span class="user-details-label">Session Token</span>
+                            <span id="dropdown-user-token" class="user-details-value mono" style="font-size: 0.75rem;">N/A</span>
+                        </li>
+                        <li class="user-details-item">
+                            <span class="user-details-label">Registry Engine</span>
+                            <span class="user-details-value">SQLite + Fastify</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
             <button onclick="logout()" class="nav-btn">Sign Out</button>
         </div>
     </header>
@@ -763,6 +850,33 @@ export const adminHtml = `<!DOCTYPE html>
             }
         }
 
+        function toggleUserDropdown(event) {
+            event.stopPropagation();
+            const dropdown = document.getElementById('user-dropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function updateUserDropdown() {
+            const tokenEl = document.getElementById('dropdown-user-token');
+            if (tokenEl) {
+                if (currentToken) {
+                    const masked = currentToken.length <= 12 
+                        ? currentToken 
+                        : currentToken.substring(0, 8) + '...' + currentToken.substring(currentToken.length - 4);
+                    tokenEl.textContent = masked;
+                } else {
+                    tokenEl.textContent = 'N/A';
+                }
+            }
+        }
+
+        window.addEventListener('click', () => {
+            const dropdown = document.getElementById('user-dropdown');
+            if (dropdown && dropdown.classList.contains('show')) {
+                dropdown.classList.remove('show');
+            }
+        });
+
         // Check authentication state on landing
         window.addEventListener('DOMContentLoaded', async () => {
             // Setup theme UI state
@@ -774,6 +888,7 @@ export const adminHtml = `<!DOCTYPE html>
 
             currentToken = getCookie('pb_admin_session');
             if (currentToken) {
+                updateUserDropdown();
                 document.getElementById('header-panel').style.display = 'flex';
                 await loadProjectsData();
                 showPage('projects');
@@ -817,6 +932,7 @@ export const adminHtml = `<!DOCTYPE html>
                 if (res.ok) {
                     setCookie('pb_admin_session', token, 1);
                     currentToken = token;
+                    updateUserDropdown();
                     document.getElementById('header-panel').style.display = 'flex';
                     await loadProjectsData();
                     showPage('projects');
