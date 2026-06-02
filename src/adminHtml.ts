@@ -1170,7 +1170,7 @@ export const adminHtml = `<!DOCTYPE html>
                 card.innerHTML = \`
                     <div class="card-header-row">
                         <div class="card-title-group">
-                            <h3 style="font-size: 1.125rem; font-weight: 700;">\${escapeHtml(r.owner)}/\${escapeHtml(r.repo)}</h3>
+                            <h3 onclick="drilldownRepo('\${r.id}')" style="font-size: 1.125rem; font-weight: 700; cursor: pointer; display: inline-block; transition: color 0.15s ease;" onmouseover="this.style.color='var(--accent-purple)'" onmouseout="this.style.color=''" class="repo-title-link">\${escapeHtml(r.owner)}/\${escapeHtml(r.repo)}</h3>
                             <span class="badge \${tierClass}">\${tierText}</span>
                             <span class="badge \${statusClass}">Status: \${r.verification_status}</span>
                         </div>
