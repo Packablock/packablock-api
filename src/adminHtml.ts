@@ -1565,6 +1565,12 @@ export const adminHtml = `<!DOCTYPE html>
                 treeLayout(root);
 
                 const nodes = root.descendants();
+                // Alternate vertical positions (d.x) to create a gorgeous undulating trust chain
+                nodes.forEach((d) => {
+                    if (d.depth > 0) {
+                        d.x = (d.depth % 2 === 0) ? -55 : 55;
+                    }
+                });
                 const links = root.links();
 
                 const initialX = 80;
@@ -1589,7 +1595,7 @@ export const adminHtml = `<!DOCTYPE html>
                     .enter()
                     .append("g")
                     .attr("class", d => \`node node-\${d.data.type}\`)
-                    .attr("transform", d => \`translate(\${d.data.y || 0}, \${d.data.x || 0})\`);
+                    .attr("transform", d => \`translate(\${d.y || 0}, \${d.x || 0})\`);
 
                 const nodeCircle = nodeGroup.append("circle")
                     .attr("r", 14)
