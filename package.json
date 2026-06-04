@@ -9,6 +9,7 @@
 		"lint": "biome lint .",
 		"format:check": "biome format .",
 		"format:write": "biome format --write .",
+		"release": "bun run scripts/release.ts",
 		"check-all": "bun run typecheck && bun run lint && bun run format:check && bun run test"
 	},
 	"private": true,
