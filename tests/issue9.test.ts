@@ -131,9 +131,11 @@ describe("Issue #9 - SemVer-based alerting & webhook triggers on registry push e
 	it("should trigger correct SemVer webhooks (chain.pushed, package.added, health.warning open_fuse_rule) on first block push", async () => {
 		// Block 0: foo (1.0.0), bar (>=2.0.0) -> triggers open fuse constraint warning
 		const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-			packages: {
-				foo: "1.0.0",
-				bar: ">=2.0.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: "1.0.0" },
+					{ bar: ">=2.0.0" },
+				],
 			},
 		});
 
@@ -208,18 +210,22 @@ describe("Issue #9 - SemVer-based alerting & webhook triggers on registry push e
 	it("should trigger technical_debt_wall health warning and package.updated on second block push with major version bump", async () => {
 		// Build a chain that contains block0 + block1
 		const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-			packages: {
-				foo: "1.0.0",
-				bar: ">=2.0.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: "1.0.0" },
+					{ bar: ">=2.0.0" },
+				],
 			},
 		});
 
 		// Block 1: foo (2.0.0 - major upgrade), bar (2.1.0 - update), baz (3.0.0 - added)
 		const block1 = createValidChainPair(1, block0.metaHash, {
-			packages: {
-				foo: "2.0.0",
-				bar: "2.1.0",
-				baz: "3.0.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: [{ old: "1.0.0" }, { new: "2.0.0" }] },
+					{ bar: [{ old: ">=2.0.0" }, { new: "2.1.0" }] },
+					{ baz: [{ new: "3.0.0" }] },
+				],
 			},
 		});
 
@@ -286,25 +292,30 @@ describe("Issue #9 - SemVer-based alerting & webhook triggers on registry push e
 
 	it("should trigger dependency_regression and high_drift_velocity health warnings on third block push", async () => {
 		const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-			packages: {
-				foo: "1.0.0",
-				bar: ">=2.0.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: "1.0.0" },
+					{ bar: ">=2.0.0" },
+				],
 			},
 		});
 
 		const block1 = createValidChainPair(1, block0.metaHash, {
-			packages: {
-				foo: "2.0.0",
-				bar: "2.1.0",
-				baz: "3.0.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: [{ old: "1.0.0" }, { new: "2.0.0" }] },
+					{ bar: [{ old: ">=2.0.0" }, { new: "2.1.0" }] },
+					{ baz: [{ new: "3.0.0" }] },
+				],
 			},
 		});
 
 		const block2 = createValidChainPair(2, block1.metaHash, {
-			packages: {
-				foo: "1.8.0",
-				bar: "2.1.0",
-				baz: "3.4.0",
+			"package-lock.json": {
+				packages: [
+					{ foo: [{ old: "2.0.0" }, { new: "1.8.0" }] },
+					{ baz: [{ old: "3.0.0" }, { new: "3.4.0" }] },
+				],
 			},
 		});
 

@@ -128,11 +128,12 @@ describe("Issue #4 - New Registry API Endpoints", () => {
 		it("should return chronological list of blocks and signatures after successful push", async () => {
 			// Construct Block 0 (Genesis)
 			const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-				packages: {
-					"package-x": {
-						version: "1.0.0",
-						integrity: "sha512-xGenesis",
-					},
+				"package-lock.json": {
+					packages: [
+						{
+							"package-x": "1.0.0",
+						},
+					],
 				},
 			});
 
@@ -141,11 +142,12 @@ describe("Issue #4 - New Registry API Endpoints", () => {
 				1,
 				block0.metaHash,
 				{
-					packages: {
-						"package-x": {
-							version: "1.0.1",
-							integrity: "sha512-xBumped",
-						},
+					"package-lock.json": {
+						packages: [
+							{
+								"package-x": [{ old: "1.0.0" }, { new: "1.0.1" }],
+							},
+						],
 					},
 				},
 				{
@@ -189,14 +191,14 @@ describe("Issue #4 - New Registry API Endpoints", () => {
 			expect(history[0].prev_meta_hash).toBe(GENESIS_PREV_HASH);
 			expect(history[0].data_hash).toBe(block0.dataHash);
 			expect(history[0].meta_hash).toBe(block0.metaHash);
-			expect(history[0].packages["package-x"].version).toBe("1.0.0");
+			expect(history[0]["package-lock.json"].packages[0]["package-x"]).toBe("1.0.0");
 
 			// Assert Block 1 history payload
 			expect(history[1].block_index).toBe(1);
 			expect(history[1].prev_meta_hash).toBe(block0.metaHash);
 			expect(history[1].data_hash).toBe(block1.dataHash);
 			expect(history[1].meta_hash).toBe(block1.metaHash);
-			expect(history[1].packages["package-x"].version).toBe("1.0.1");
+			expect(history[1]["package-lock.json"].packages[0]["package-x"][1].new).toBe("1.0.1");
 
 			// Test GET /api/v1/repo/:id/sigs
 			const sigsRes = await server.inject({

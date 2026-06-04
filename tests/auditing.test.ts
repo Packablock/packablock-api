@@ -226,11 +226,12 @@ describe("Registry Auditing and Webhooks", () => {
 		it("should push a valid 2-block package chain and retrieve its audit history & sigs", async () => {
 			// Construct Block 0 (Genesis)
 			const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-				packages: {
-					"packa-block": {
-						version: "1.0.0",
-						integrity: "sha512-genesisHash",
-					},
+				"package-lock.json": {
+					packages: [
+						{
+							"packa-block": "1.0.0",
+						},
+					],
 				},
 			});
 
@@ -239,11 +240,12 @@ describe("Registry Auditing and Webhooks", () => {
 				1,
 				block0.metaHash,
 				{
-					packages: {
-						"packa-block": {
-							version: "1.1.0",
-							integrity: "sha512-bumpedHash",
-						},
+					"package-lock.json": {
+						packages: [
+							{
+								"packa-block": [{ old: "1.0.0" }, { new: "1.1.0" }],
+							},
+						],
 					},
 				},
 				{
@@ -292,18 +294,18 @@ describe("Registry Auditing and Webhooks", () => {
 			expect(historyData.history[0].prevMetaHash).toBe(GENESIS_PREV_HASH);
 			expect(historyData.history[0].dataHash).toBe(block0.dataHash);
 			expect(historyData.history[0].metaHash).toBe(block0.metaHash);
-			expect(historyData.history[0].packages["packa-block"].version).toBe(
-				"1.0.0",
-			);
+			expect(
+				historyData.history[0].packages["package-lock.json"].packages[0]["packa-block"]
+			).toBe("1.0.0");
 
 			// Assert Block 1 history
 			expect(historyData.history[1].blockIndex).toBe(1);
 			expect(historyData.history[1].prevMetaHash).toBe(block0.metaHash);
 			expect(historyData.history[1].dataHash).toBe(block1.dataHash);
 			expect(historyData.history[1].metaHash).toBe(block1.metaHash);
-			expect(historyData.history[1].packages["packa-block"].version).toBe(
-				"1.1.0",
-			);
+			expect(
+				historyData.history[1].packages["package-lock.json"].packages[0]["packa-block"][1].new
+			).toBe("1.1.0");
 
 			// Test GET /sigs
 			const sigsRes = await server.inject({
@@ -534,15 +536,19 @@ describe("Registry Auditing and Webhooks", () => {
 		it("should return a correctly structured tree and graph for a multi-block chain", async () => {
 			// Construct 2 blocks
 			const block0 = createValidChainPair(0, GENESIS_PREV_HASH, {
-				packages: {
-					"package-a": { version: "1.0.0" },
+				"package-lock.json": {
+					packages: [
+						{ "package-a": "1.0.0" },
+					],
 				},
 			});
 
 			const block1 = createValidChainPair(1, block0.metaHash, {
-				packages: {
-					"package-a": { version: "1.0.0" },
-					"package-b": { version: "2.0.0" },
+				"package-lock.json": {
+					packages: [
+						{ "package-a": "1.0.0" },
+						{ "package-b": "2.0.0" },
+					],
 				},
 			});
 
