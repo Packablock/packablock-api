@@ -168,4 +168,82 @@ describe("Registry Candlesticks API Endpoint", () => {
 		expect(expressCandle.first_seen_version).toBe("4.18.0");
 		expect(expressCandle.latest_upstream_version).toBe("4.18.99");
 	});
+
+	it("should return 404 for unregistered repository", async () => {
+		const res = await server.inject({
+			method: "GET",
+			url: "/api/v1/repo/nonexistent/repo/candlesticks",
+		});
+		expect(res.statusCode).toBe(404);
+		const data = JSON.parse(res.body);
+		expect(data.error).toBe("Not Found");
+	});
+
+	it("should return 404 for registered repository with no blocks", async () => {
+		const ownerNoBlocks = "noblocksowner";
+		const repoNoBlocks = "noblocks-repo";
+		const regRes = await server.inject({
+			method: "POST",
+			url: "/api/v1/acme/new-account",
+			payload: {
+				owner: ownerNoBlocks,
+				repo: repoNoBlocks,
+				isPremium: false,
+			},
+		});
+		expect(regRes.statusCode).toBe(200);
+
+		const res = await server.inject({
+			method: "GET",
+			url: `/api/v1/repo/${ownerNoBlocks}/${repoNoBlocks}/candlesticks`,
+		});
+		expect(res.statusCode).toBe(404);
+		const data = JSON.parse(res.body);
+		expect(data.message).toContain("No package history log exists");
+	});
+
+	it("should return empty array if last block has no package.json constraints", async () => {
+		const ownerNoConstraints = "noconstraintsowner";
+		const repoNoConstraints = "noconstraints-repo";
+
+		const regRes = await server.inject({
+			method: "POST",
+			url: "/api/v1/acme/new-account",
+			payload: {
+				owner: ownerNoConstraints,
+				repo: repoNoConstraints,
+				isPremium: false,
+			},
+		});
+		expect(regRes.statusCode).toBe(200);
+		const actualToken = JSON.parse(regRes.body).registrationToken;
+
+		const blockData = {
+			lockfiles: {
+				"package-lock.json": {
+					packages: [{ lodash: "4.17.21" }],
+				},
+			},
+		};
+		const b0 = createValidChainPair(0, GENESIS_PREV_HASH, blockData);
+
+		const pushRes = await server.inject({
+			method: "POST",
+			url: "/api/v1/log/push",
+			headers: {
+				"content-type": "text/yaml",
+				"x-repo-token": actualToken,
+			},
+			body: b0.chainFragment,
+		});
+		expect(pushRes.statusCode).toBe(200);
+
+		const res = await server.inject({
+			method: "GET",
+			url: `/api/v1/repo/${ownerNoConstraints}/${repoNoConstraints}/candlesticks`,
+		});
+		expect(res.statusCode).toBe(200);
+		const parsed = YAML.parse(res.body);
+		expect(parsed).toEqual([]);
+	});
 });
