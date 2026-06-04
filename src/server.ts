@@ -81,11 +81,11 @@ server.get("/health", async () => {
  * Version check endpoints
  */
 server.get("/version", async () => {
-	return { success: true, version: "1.0.1", service: "packablock-registry" };
+	return { success: true, version: "1.1.0", service: "packablock-registry" };
 });
 
 server.get("/api/v1/version", async () => {
-	return { success: true, version: "1.0.1", service: "packablock-registry" };
+	return { success: true, version: "1.1.0", service: "packablock-registry" };
 });
 
 /**
