@@ -413,17 +413,169 @@ interface SemVerWarning {
 
 function parsePackages(dataObj: any): Record<string, string> {
 	const pkgs: Record<string, string> = {};
-	if (!dataObj || !dataObj.packages || typeof dataObj.packages !== "object") {
+	if (!dataObj || typeof dataObj !== "object") {
 		return pkgs;
 	}
-	for (const [name, val] of Object.entries(dataObj.packages)) {
-		if (typeof val === "string") {
-			pkgs[name] = val;
-		} else if (val && typeof val === "object" && (val as any).version) {
-			pkgs[name] = (val as any).version;
+
+	for (const [lockfileName, lockfileVal] of Object.entries(dataObj)) {
+		if (!lockfileVal || typeof lockfileVal !== "object") {
+			continue;
+		}
+		const inner = lockfileVal as any;
+		if (inner.chain_event === "forget") {
+			continue;
+		}
+		if (Array.isArray(inner.packages)) {
+			const firstItem = inner.packages[0];
+			let isDiff = false;
+			if (firstItem && typeof firstItem === "object") {
+				const values = Object.values(firstItem);
+				if (values.length > 0 && Array.isArray(values[0])) {
+					isDiff = true;
+				}
+			}
+
+			if (!isDiff) {
+				for (const item of inner.packages) {
+					if (item && typeof item === "object") {
+						for (const [name, ver] of Object.entries(item)) {
+							pkgs[name] = String(ver);
+						}
+					}
+				}
+			} else {
+				for (const item of inner.packages) {
+					if (item && typeof item === "object") {
+						for (const [name, ops] of Object.entries(item)) {
+							if (Array.isArray(ops)) {
+								let isRemoved = false;
+								let newVer = "";
+								for (const op of ops) {
+									if (op && typeof op === "object") {
+										if (op.msg === "removed") {
+											isRemoved = true;
+										}
+										if (op.new !== undefined) {
+											newVer = String(op.new);
+										}
+									}
+								}
+								if (!isRemoved && newVer) {
+									pkgs[name] = newVer;
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 	return pkgs;
+}
+
+function reconstructPackagesAtBlock(docs: string[], upToBlockCount: number): Record<string, string> {
+	const currentPackages: Record<string, string> = {};
+	const allKeys = new Set<string>();
+
+	for (let i = 0; i < upToBlockCount; i++) {
+		const dataDocStr = docs[2 * i];
+		if (!dataDocStr) continue;
+		try {
+			const parsed = YAML.parse(dataDocStr);
+			if (parsed && typeof parsed === "object") {
+				for (const [key, val] of Object.entries(parsed)) {
+					if (val && typeof val === "object" && (val as any).packages) {
+						allKeys.add(key);
+					}
+				}
+			}
+		} catch {}
+	}
+
+	for (const filename of allKeys) {
+		let isTracked = false;
+		let lockfilePackages: Record<string, string> = {};
+
+		for (let i = 0; i < upToBlockCount; i++) {
+			const dataDocStr = docs[2 * i];
+			if (!dataDocStr) continue;
+
+			try {
+				const parsed = YAML.parse(dataDocStr);
+				if (parsed && typeof parsed === "object" && filename in parsed) {
+					const inner = parsed[filename];
+					if (i === 0) {
+						isTracked = true;
+					} else if (inner && typeof inner === "object") {
+						if (inner.chain_event === "init") {
+							isTracked = true;
+						} else if (inner.chain_event === "forget") {
+							isTracked = false;
+							lockfilePackages = {};
+						} else if (inner.packages) {
+							isTracked = true;
+						}
+					}
+
+					if (inner && isTracked) {
+						if (Array.isArray(inner.packages)) {
+							const firstItem = inner.packages[0];
+							let isDiff = false;
+							if (firstItem && typeof firstItem === "object") {
+								const values = Object.values(firstItem);
+								if (values.length > 0 && Array.isArray(values[0])) {
+									isDiff = true;
+								}
+							}
+
+							if (!isDiff) {
+								lockfilePackages = {};
+								for (const item of inner.packages) {
+									if (item && typeof item === "object") {
+										for (const [name, ver] of Object.entries(item)) {
+											lockfilePackages[name] = String(ver);
+										}
+									}
+								}
+							} else {
+								for (const item of inner.packages) {
+									if (item && typeof item === "object") {
+										for (const [name, ops] of Object.entries(item)) {
+											if (Array.isArray(ops)) {
+												let isRemoved = false;
+												let newVer = "";
+												for (const op of ops) {
+													if (op && typeof op === "object") {
+														if (op.msg === "removed") {
+															isRemoved = true;
+														}
+														if (op.new !== undefined) {
+															newVer = String(op.new);
+														}
+													}
+												}
+												if (isRemoved) {
+													delete lockfilePackages[name];
+												} else if (newVer) {
+													lockfilePackages[name] = newVer;
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			} catch (e) {}
+		}
+
+		if (isTracked) {
+			Object.assign(currentPackages, lockfilePackages);
+		}
+	}
+
+	return currentPackages;
 }
 
 function auditSemVerHealth(
@@ -809,46 +961,21 @@ server.post("/api/v1/log/push", async (request, reply) => {
 
 		const docs = splitRawDocuments(chainContent);
 		const blockCount = docs.length / 2;
-		let newPkgData: any = {};
-		let oldPkgData: any = {};
-
-		if (blockCount >= 1) {
-			try {
-				const lastDataStr = docs[2 * (blockCount - 1)];
-				if (lastDataStr) {
-					newPkgData = YAML.parse(lastDataStr);
+		let fullDocs = [...docs];
+		try {
+			const archived = getArchivedLogs(resolvedRepo.id);
+			if (archived.length > 0) {
+				const lastArchived = archived[archived.length - 1];
+				if (lastArchived) {
+					const archDocs = splitRawDocuments(lastArchived.chain_content);
+					fullDocs = [...archDocs, ...docs];
 				}
-			} catch (e) {}
-
-			if (blockCount >= 2) {
-				try {
-					const prevDataStr = docs[2 * (blockCount - 2)];
-					if (prevDataStr) {
-						oldPkgData = YAML.parse(prevDataStr);
-					}
-				} catch (e) {}
-			} else {
-				try {
-					const archived = getArchivedLogs(resolvedRepo.id);
-					if (archived.length > 0) {
-						const lastArchived = archived[archived.length - 1];
-						if (lastArchived) {
-							const archDocs = splitRawDocuments(lastArchived.chain_content);
-							const archBlockCount = archDocs.length / 2;
-							if (archBlockCount >= 1) {
-								const lastArchDataStr = archDocs[2 * (archBlockCount - 1)];
-								if (lastArchDataStr) {
-									oldPkgData = YAML.parse(lastArchDataStr);
-								}
-							}
-						}
-					}
-				} catch (e) {}
 			}
-		}
+		} catch (e) {}
 
-		const oldPkgs = parsePackages(oldPkgData);
-		const newPkgs = parsePackages(newPkgData);
+		const totalBlockCount = fullDocs.length / 2;
+		const oldPkgs = reconstructPackagesAtBlock(fullDocs, totalBlockCount - 1);
+		const newPkgs = reconstructPackagesAtBlock(fullDocs, totalBlockCount);
 
 		// Compute added and updated diffs
 		for (const [name, newVer] of Object.entries(newPkgs)) {
@@ -1353,7 +1480,7 @@ server.get("/api/v1/repo/:owner/:repo/history", async (request, reply) => {
 					dataHash: parsedMeta.data_hash,
 					metaHash: parsedMeta.meta_hash,
 					prevMetaHash: parsedMeta.prev_meta_hash,
-					packages: parsedData?.packages || {},
+					packages: parsedData || {},
 				});
 			}
 		}
@@ -1946,9 +2073,14 @@ server.get("/api/v1/repo/:owner/:repo/tree", async (request, reply) => {
 			if (parsedMeta) {
 				const metaHash = parsedMeta.meta_hash;
 				const prevMetaHash = parsedMeta.prev_meta_hash || firstPrevHash;
-				const packagesCount = parsedData?.packages
-					? Object.keys(parsedData.packages).length
-					: 0;
+				let packagesCount = 0;
+				if (parsedData && typeof parsedData === "object") {
+					for (const [key, val] of Object.entries(parsedData)) {
+						if (val && typeof val === "object" && Array.isArray((val as any).packages)) {
+							packagesCount += (val as any).packages.length;
+						}
+					}
+				}
 				const isRollover = !!parsedData?.genesis_rollover;
 
 				const node: TreeNode = {
