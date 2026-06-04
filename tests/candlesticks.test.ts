@@ -246,4 +246,64 @@ describe("Registry Candlesticks API Endpoint", () => {
 		const parsed = YAML.parse(res.body);
 		expect(parsed).toEqual([]);
 	});
+
+	it("should include placeholders for manifests without constraints", async () => {
+		const ownerPlaceholder = "placeholderowner";
+		const repoPlaceholder = "placeholder-repo";
+
+		const regRes = await server.inject({
+			method: "POST",
+			url: "/api/v1/acme/new-account",
+			payload: {
+				owner: ownerPlaceholder,
+				repo: repoPlaceholder,
+				isPremium: false,
+			},
+		});
+		expect(regRes.statusCode).toBe(200);
+		const actualToken = JSON.parse(regRes.body).registrationToken;
+
+		const blockData = {
+			"package.json": {
+				constraints: [{ lodash: "^4.17.21" }],
+			},
+			"bunfig.toml": {
+				chain_event: "init",
+				constraints: [],
+			},
+			lockfiles: {
+				"package-lock.json": {
+					packages: [{ lodash: "4.17.21" }],
+				},
+			},
+		};
+		const b0 = createValidChainPair(0, GENESIS_PREV_HASH, blockData);
+
+		const pushRes = await server.inject({
+			method: "POST",
+			url: "/api/v1/log/push",
+			headers: {
+				"content-type": "text/yaml",
+				"x-repo-token": actualToken,
+			},
+			body: b0.chainFragment,
+		});
+		expect(pushRes.statusCode).toBe(200);
+
+		const res = await server.inject({
+			method: "GET",
+			url: `/api/v1/repo/${ownerPlaceholder}/${repoPlaceholder}/candlesticks`,
+		});
+		expect(res.statusCode).toBe(200);
+		const parsed = YAML.parse(res.body);
+		expect(parsed).toHaveLength(2);
+
+		const lodashItem = parsed.find((c: any) => c.package === "lodash");
+		expect(lodashItem).toBeDefined();
+		expect(lodashItem.manifest).toBe("package.json");
+
+		const emptyItem = parsed.find((c: any) => c.manifest === "bunfig.toml");
+		expect(emptyItem).toBeDefined();
+		expect(emptyItem.package).toBeNull();
+	});
 });

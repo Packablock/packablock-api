@@ -675,7 +675,7 @@ function reconstructPackagesAtBlock(
 					}
 
 					if (inner && isTracked) {
-						if (Array.isArray(inner.packages)) {
+						if (Array.isArray(inner.packages) && inner.packages.length > 0) {
 							const firstItem = inner.packages[0];
 							let isDiff = false;
 							if (firstItem && typeof firstItem === "object") {
@@ -794,11 +794,16 @@ function reconstructConstraintsAtBlock(
 function reconstructConstraintsWithManifestsAtBlock(
 	docs: string[],
 	upToBlockCount: number,
-): Record<string, { constraint: string; manifest: string }> {
+): {
+	constraints: Record<string, { constraint: string; manifest: string }>;
+	manifests: string[];
+} {
 	const currentConstraints: Record<
 		string,
 		{ constraint: string; manifest: string }
 	> = {};
+	const manifestsSet = new Set<string>();
+
 	for (let i = 0; i < upToBlockCount; i++) {
 		const dataDocStr = docs[2 * i];
 		if (!dataDocStr) continue;
@@ -815,6 +820,7 @@ function reconstructConstraintsWithManifestsAtBlock(
 				) {
 					continue;
 				}
+				manifestsSet.add(manifestKey);
 				if (!manifestData || typeof manifestData !== "object") continue;
 				const pkgJson = manifestData as any;
 				if (pkgJson.chain_event === "init") {
@@ -869,7 +875,10 @@ function reconstructConstraintsWithManifestsAtBlock(
 			}
 		} catch {}
 	}
-	return currentConstraints;
+	return {
+		constraints: currentConstraints,
+		manifests: Array.from(manifestsSet),
+	};
 }
 
 function auditSemVerHealth(
@@ -1940,10 +1949,8 @@ server.get("/api/v1/repo/:owner/:repo/candlesticks", async (request, reply) => {
 		}
 
 		// Reconstruct latest constraints by replaying block history
-		const constraints = reconstructConstraintsWithManifestsAtBlock(
-			docs,
-			blockCount,
-		);
+		const { constraints, manifests } =
+			reconstructConstraintsWithManifestsAtBlock(docs, blockCount);
 
 		// Resolve all candlesticks in parallel to optimize upstream fetch performance
 		const candlestickPromises = Object.entries(constraints).map(
@@ -1982,6 +1989,26 @@ server.get("/api/v1/repo/:owner/:repo/candlesticks", async (request, reply) => {
 		);
 
 		const candlesticks = await Promise.all(candlestickPromises);
+
+		// Include placeholders for manifests that don't have constraints
+		const activeManifests = new Set(candlesticks.map((c) => c.manifest));
+		for (const manifest of manifests) {
+			if (!activeManifests.has(manifest)) {
+				candlesticks.push({
+					package: null as any,
+					manifest: manifest,
+					constraint: null as any,
+					min_version: null as any,
+					max_version: null as any,
+					type: null as any,
+					current_pinned_version: null as any,
+					first_seen_version: null as any,
+					first_seen_timestamp: null as any,
+					latest_upstream_version: null as any,
+					latest_upstream_timestamp: null as any,
+				});
+			}
+		}
 
 		const yamlResponse = YAML.stringify(candlesticks);
 		reply.header("Content-Type", "application/yaml");
