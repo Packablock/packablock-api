@@ -6,7 +6,12 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
 import fs from "node:fs";
-import { sha256, deterministicMetaHash, GENESIS_PREV_HASH, splitRawDocuments } from "./verify.js";
+import {
+	sha256,
+	deterministicMetaHash,
+	GENESIS_PREV_HASH,
+	splitRawDocuments,
+} from "./verify.js";
 import YAML from "yaml";
 
 const DB_FILE =
@@ -325,8 +330,16 @@ async function runSeeder() {
 	);
 
 	// --- B. Ledger for 'packablock/pkablk-auditor' (Standard Tier, imported from demo repo) ---
-	const demoDir = path.join(process.cwd(), "..", "packablock-demo", "example-rollover");
-	const archivedChainPath = path.join(demoDir, "packablock-fd504ac9ca896640ab449c9703490ab6e3370d2558f97eabbd3754a42fc50d58.yaml");
+	const demoDir = path.join(
+		process.cwd(),
+		"..",
+		"packablock-demo",
+		"example-rollover",
+	);
+	const archivedChainPath = path.join(
+		demoDir,
+		"packablock-fd504ac9ca896640ab449c9703490ab6e3370d2558f97eabbd3754a42fc50d58.yaml",
+	);
 	const activeChainPath = path.join(demoDir, "packablock.yaml");
 
 	if (fs.existsSync(archivedChainPath) && fs.existsSync(activeChainPath)) {
@@ -336,16 +349,28 @@ async function runSeeder() {
 
 		const archivedDocs = splitRawDocuments(archivedContent);
 		const archivedBlockCount = archivedDocs.length / 2;
-		const archivedMetaObj = YAML.parse(archivedDocs[archivedDocs.length - 1])?.["$yaml-chain-meta"];
+		const lastArchivedDoc = archivedDocs[archivedDocs.length - 1];
+		if (lastArchivedDoc === undefined) {
+			throw new Error("Archived chain is empty");
+		}
+		const archivedMetaObj = YAML.parse(lastArchivedDoc)?.["$yaml-chain-meta"];
 		const archivedLastHash = archivedMetaObj?.meta_hash;
 
 		const activeDocs = splitRawDocuments(activeContent);
 		const activeBlockCount = activeDocs.length / 2;
-		const activeMetaObj = YAML.parse(activeDocs[activeDocs.length - 1])?.["$yaml-chain-meta"];
+		const lastActiveDoc = activeDocs[activeDocs.length - 1];
+		if (lastActiveDoc === undefined) {
+			throw new Error("Active chain is empty");
+		}
+		const activeMetaObj = YAML.parse(lastActiveDoc)?.["$yaml-chain-meta"];
 		const activeLastHash = activeMetaObj?.meta_hash;
 
-		console.log(`  Archived epoch block count: ${archivedBlockCount}, last hash: ${archivedLastHash}`);
-		console.log(`  Active epoch block count: ${activeBlockCount}, last hash: ${activeLastHash}`);
+		console.log(
+			`  Archived epoch block count: ${archivedBlockCount}, last hash: ${archivedLastHash}`,
+		);
+		console.log(
+			`  Active epoch block count: ${activeBlockCount}, last hash: ${activeLastHash}`,
+		);
 
 		// Insert archived log for Repo 2 (Epoch 0)
 		db.run(
@@ -353,7 +378,14 @@ async function runSeeder() {
 			INSERT INTO archived_logs (repo_id, epoch_index, chain_content, block_count, last_block_hash, archived_at)
 			VALUES (?, ?, ?, ?, ?, ?)
 		`,
-			[2, 0, archivedContent, archivedBlockCount, archivedLastHash, new Date().toISOString()],
+			[
+				2,
+				0,
+				archivedContent,
+				archivedBlockCount,
+				archivedLastHash,
+				new Date().toISOString(),
+			],
 		);
 
 		// Insert active log for Repo 2 (Epoch 1)
@@ -362,10 +394,18 @@ async function runSeeder() {
 			INSERT INTO logs (repo_id, chain_content, block_count, last_block_hash, updated_at)
 			VALUES (?, ?, ?, ?, ?)
 		`,
-			[2, activeContent, activeBlockCount, activeLastHash, new Date().toISOString()],
+			[
+				2,
+				activeContent,
+				activeBlockCount,
+				activeLastHash,
+				new Date().toISOString(),
+			],
 		);
 	} else {
-		console.log("⚠️ Large chain files not found in packablock-demo, falling back to basic blocks.");
+		console.log(
+			"⚠️ Large chain files not found in packablock-demo, falling back to basic blocks.",
+		);
 		let chain2 = "";
 		let prevHash2 = GENESIS_PREV_HASH;
 
