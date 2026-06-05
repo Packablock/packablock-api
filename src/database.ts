@@ -84,7 +84,7 @@ export function initDb(): void {
 		? path.isAbsolute(process.env.DATABASE_FILE)
 			? process.env.DATABASE_FILE
 			: path.join(process.cwd(), process.env.DATABASE_FILE)
-		: path.join(process.cwd(), "packablock.sqlite");
+		: path.join(process.cwd(), "data", "packablock.sqlite");
 
 	db = new Database(DB_FILE, { create: true });
 

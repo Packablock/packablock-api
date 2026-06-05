@@ -3027,6 +3027,8 @@ server.get(
 				meta_hash?: string;
 				identityBadge?: string | null;
 				type: "root" | "block" | "rollover";
+				data_payload?: string;
+				meta_payload?: string;
 				children: TreeNode[];
 			}
 
@@ -3041,6 +3043,8 @@ server.get(
 				meta_hash?: string;
 				identityBadge?: string | null;
 				type: "root" | "block" | "rollover";
+				data_payload?: string;
+				meta_payload?: string;
 			}
 
 			interface GraphEdge {
@@ -3102,6 +3106,8 @@ server.get(
 							meta_hash: metaHash,
 							identityBadge: badge,
 							type: isRollover ? "rollover" : "block",
+							data_payload: block.dataDocStr,
+							meta_payload: block.metaDocStr,
 							children: [],
 						};
 
@@ -3118,6 +3124,8 @@ server.get(
 							meta_hash: metaHash,
 							identityBadge: badge,
 							type: isRollover ? "rollover" : "block",
+							data_payload: block.dataDocStr,
+							meta_payload: block.metaDocStr,
 						});
 
 						flatEdges.push({
