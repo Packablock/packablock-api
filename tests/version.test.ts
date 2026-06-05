@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { server } from "../src/server.js";
+import pkg from "../package.json";
 
 describe("Registry Version API Endpoints", () => {
 	it("should return the correct version from GET /version", async () => {
@@ -12,7 +13,7 @@ describe("Registry Version API Endpoints", () => {
 		const data = JSON.parse(res.body);
 		expect(data).toEqual({
 			success: true,
-			version: "1.0.1",
+			version: pkg.version,
 			service: "packablock-registry",
 		});
 	});
@@ -27,7 +28,7 @@ describe("Registry Version API Endpoints", () => {
 		const data = JSON.parse(res.body);
 		expect(data).toEqual({
 			success: true,
-			version: "1.0.1",
+			version: pkg.version,
 			service: "packablock-registry",
 		});
 	});
