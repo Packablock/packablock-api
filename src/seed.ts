@@ -6,7 +6,7 @@
 import { Database } from "bun:sqlite";
 import path from "node:path";
 import fs from "node:fs";
-import { sha256, deterministicMetaHash, GENESIS_PREV_HASH } from "./verify.js";
+import { sha256, deterministicMetaHash, GENESIS_PREV_HASH, splitRawDocuments } from "./verify.js";
 import YAML from "yaml";
 
 const DB_FILE =
@@ -84,6 +84,11 @@ async function runSeeder() {
 			name: "E-Commerce Core Services",
 			created_at: new Date().toISOString(),
 		},
+		{
+			id: "packablock-audit",
+			name: "Packablock Audit Project",
+			created_at: new Date().toISOString(),
+		},
 	];
 
 	const insertProject = db.prepare(
@@ -119,7 +124,7 @@ async function runSeeder() {
 			verification_status: "none",
 			challenge_nonce: null,
 			pinned_public_key: null,
-			project_id: "supply-chain-defense",
+			project_id: "packablock-audit",
 		},
 		{
 			id: 3,
@@ -319,46 +324,88 @@ async function runSeeder() {
 		[1, chain1_epoch1, 2, finalHash1, new Date().toISOString()],
 	);
 
-	// --- B. Ledger for 'packablock/pkablk-auditor' (Standard Tier, Basic Blocks) ---
-	let chain2 = "";
-	let prevHash2 = GENESIS_PREV_HASH;
+	// --- B. Ledger for 'packablock/pkablk-auditor' (Standard Tier, imported from demo repo) ---
+	const demoDir = path.join(process.cwd(), "..", "packablock-demo", "example-rollover");
+	const archivedChainPath = path.join(demoDir, "packablock-fd504ac9ca896640ab449c9703490ab6e3370d2558f97eabbd3754a42fc50d58.yaml");
+	const activeChainPath = path.join(demoDir, "packablock.yaml");
 
-	const block2_0 = createValidChainPair(
-		0,
-		prevHash2,
-		{
-			name: "packablock/pkablk-auditor",
-			version: "1.0.0",
-			commit: "7b89fc1",
-			description: "Genesis release of pkablk-auditor",
-		},
-		{ git_actor: "contributor1@packablock.com" },
-	);
-	chain2 += block2_0.chainFragment;
-	prevHash2 = block2_0.metaHash;
+	if (fs.existsSync(archivedChainPath) && fs.existsSync(activeChainPath)) {
+		console.log("📖 Importing large chain example from packablock-demo...");
+		const archivedContent = fs.readFileSync(archivedChainPath, "utf8");
+		const activeContent = fs.readFileSync(activeChainPath, "utf8");
 
-	const block2_1 = createValidChainPair(
-		1,
-		prevHash2,
-		{
-			name: "packablock/pkablk-auditor",
-			version: "1.0.1",
-			commit: "44ef22c",
-			description: "Implement local integrity parsing",
-		},
-		{ git_actor: "contributor1@packablock.com" },
-	);
-	chain2 += "\n" + block2_1.chainFragment;
-	const finalHash2 = block2_1.metaHash;
+		const archivedDocs = splitRawDocuments(archivedContent);
+		const archivedBlockCount = archivedDocs.length / 2;
+		const archivedMetaObj = YAML.parse(archivedDocs[archivedDocs.length - 1])?.["$yaml-chain-meta"];
+		const archivedLastHash = archivedMetaObj?.meta_hash;
 
-	// Insert active log for Repo 2
-	db.run(
-		`
-		INSERT INTO logs (repo_id, chain_content, block_count, last_block_hash, updated_at)
-		VALUES (?, ?, ?, ?, ?)
-	`,
-		[2, chain2, 2, finalHash2, new Date().toISOString()],
-	);
+		const activeDocs = splitRawDocuments(activeContent);
+		const activeBlockCount = activeDocs.length / 2;
+		const activeMetaObj = YAML.parse(activeDocs[activeDocs.length - 1])?.["$yaml-chain-meta"];
+		const activeLastHash = activeMetaObj?.meta_hash;
+
+		console.log(`  Archived epoch block count: ${archivedBlockCount}, last hash: ${archivedLastHash}`);
+		console.log(`  Active epoch block count: ${activeBlockCount}, last hash: ${activeLastHash}`);
+
+		// Insert archived log for Repo 2 (Epoch 0)
+		db.run(
+			`
+			INSERT INTO archived_logs (repo_id, epoch_index, chain_content, block_count, last_block_hash, archived_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`,
+			[2, 0, archivedContent, archivedBlockCount, archivedLastHash, new Date().toISOString()],
+		);
+
+		// Insert active log for Repo 2 (Epoch 1)
+		db.run(
+			`
+			INSERT INTO logs (repo_id, chain_content, block_count, last_block_hash, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`,
+			[2, activeContent, activeBlockCount, activeLastHash, new Date().toISOString()],
+		);
+	} else {
+		console.log("⚠️ Large chain files not found in packablock-demo, falling back to basic blocks.");
+		let chain2 = "";
+		let prevHash2 = GENESIS_PREV_HASH;
+
+		const block2_0 = createValidChainPair(
+			0,
+			prevHash2,
+			{
+				name: "packablock/pkablk-auditor",
+				version: "1.0.0",
+				commit: "7b89fc1",
+				description: "Genesis release of pkablk-auditor",
+			},
+			{ git_actor: "contributor1@packablock.com" },
+		);
+		chain2 += block2_0.chainFragment;
+		prevHash2 = block2_0.metaHash;
+
+		const block2_1 = createValidChainPair(
+			1,
+			prevHash2,
+			{
+				name: "packablock/pkablk-auditor",
+				version: "1.0.1",
+				commit: "44ef22c",
+				description: "Implement local integrity parsing",
+			},
+			{ git_actor: "contributor1@packablock.com" },
+		);
+		chain2 += "\n" + block2_1.chainFragment;
+		const finalHash2 = block2_1.metaHash;
+
+		// Insert active log for Repo 2
+		db.run(
+			`
+			INSERT INTO logs (repo_id, chain_content, block_count, last_block_hash, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+		`,
+			[2, chain2, 2, finalHash2, new Date().toISOString()],
+		);
+	}
 
 	// --- C. Ledger for 'acme/payment-gateway' (Premium, OIDC/SSH Verification) ---
 	let chain3 = "";
