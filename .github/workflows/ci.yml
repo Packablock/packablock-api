@@ -24,5 +24,8 @@ jobs:
       - name: Install Dependencies
         run: bun install
 
+      - name: Audit Dependency Vulnerabilities
+        run: bun audit --audit-level=high
+
       - name: Run CI Validation Gate
         run: bun run check-all
