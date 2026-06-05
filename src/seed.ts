@@ -216,12 +216,7 @@ async function runSeeder() {
 	const block1_0 = createValidChainPair(
 		0,
 		prevHash1,
-		{
-			name: "packablock/pkablk-signer",
-			version: "1.0.0",
-			commit: "92ab56f",
-			description: "Genesis release of pkablk-signer",
-		},
+		{},
 		{
 			ssh_fingerprint: "SHA256:6iz0DBVAEGHOi6th+GYtd+t2/GoETMXrkT8V/jWa6og",
 			git_actor: "developer@packablock.com",
@@ -234,12 +229,7 @@ async function runSeeder() {
 	const block1_1 = createValidChainPair(
 		1,
 		prevHash1,
-		{
-			name: "packablock/pkablk-signer",
-			version: "1.1.0",
-			commit: "12bc34d",
-			description: "Add parallel signing pipelines",
-		},
+		{},
 		{
 			oidc_claims: {
 				actor: "agy-github-runner",
@@ -256,12 +246,7 @@ async function runSeeder() {
 	const block1_2 = createValidChainPair(
 		2,
 		prevHash1,
-		{
-			name: "packablock/pkablk-signer",
-			version: "1.1.1",
-			commit: "bc87d10",
-			description: "Fix race condition in key buffers",
-		},
+		{},
 		{
 			oidc_claims: {
 				actor: "contributor-1-github-runner",
@@ -290,9 +275,6 @@ async function runSeeder() {
 		lastHashEpoch0,
 		{
 			genesis_rollover: true,
-			previous_epoch: 0,
-			rollover_reason: "Scheduled quarterly key rotation",
-			rollover_authority: "pkablk-rollover-cli",
 		},
 		{
 			oidc_claims: { actor: "pkablk-rollover-cli" },
@@ -306,12 +288,7 @@ async function runSeeder() {
 	const block1_4 = createValidChainPair(
 		1,
 		prevHash1,
-		{
-			name: "packablock/pkablk-signer",
-			version: "2.0.0",
-			commit: "fe29c81",
-			description: "Major breaking key signature change",
-		},
+		{},
 		{
 			gpg_signature: "GPG-SIGN-256-AUTHENTIC",
 			git_actor: "owner@packablock.com",
@@ -454,12 +431,7 @@ async function runSeeder() {
 	const block3_0 = createValidChainPair(
 		0,
 		prevHash3,
-		{
-			name: "acme/payment-gateway",
-			version: "1.0.0",
-			commit: "0a1b2c3",
-			description: "Genesis ACME payment handler",
-		},
+		{},
 		{
 			ssh_fingerprint: "SHA256:IC56cK32oU9eRfG8D1aXv9Z",
 			git_actor: "gatekeeper@acme.com",
@@ -471,12 +443,7 @@ async function runSeeder() {
 	const block3_1 = createValidChainPair(
 		1,
 		prevHash3,
-		{
-			name: "acme/payment-gateway",
-			version: "1.1.0",
-			commit: "88abcf2",
-			description: "Secure tokenization pipeline integration",
-		},
+		{},
 		{
 			oidc_claims: {
 				actor: "acme-jenkins-runner",
@@ -505,12 +472,7 @@ async function runSeeder() {
 	const block4_0 = createValidChainPair(
 		0,
 		prevHash4,
-		{
-			name: "acme/shopping-cart",
-			version: "1.0.0",
-			commit: "fe77ab2",
-			description: "Genesis ACME checkout cart",
-		},
+		{},
 		{ git_actor: "checkout-lead@acme.com" },
 	);
 	chain4 += block4_0.chainFragment;
